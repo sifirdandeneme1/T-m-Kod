@@ -1,0 +1,2578 @@
+# Gerekli kütüphaneyi yükleyelim
+!pip install --upgrade --no-cache-dir git+https://github.com/rongardF/tvdatafeed.git
+
+import os
+import shutil
+import time
+import pandas as pd
+from tvDatafeed import TvDatafeed, Interval
+from multiprocessing import Pool, cpu_count
+
+# TradingView giriş
+tv = TvDatafeed(username='stratejideneme01', password='Oa++2580..,,')
+
+# Kayıt dizini
+folder_path = "/content/data"
+
+# Klasörü temizleme fonksiyonu
+def clear_folder(path):
+    if os.path.exists(path):
+        for filename in os.listdir(path):
+            file_path = os.path.join(path, filename)
+            try:
+                if os.path.isfile(file_path) or os.path.islink(file_path):
+                    os.unlink(file_path)
+                elif os.path.isdir(file_path):
+                    shutil.rmtree(file_path)
+            except Exception as e:
+                print(f'Klasör temizlenirken hata: {e}')
+        print("Klasör temizlendi")
+    else:
+        os.makedirs(path)
+
+# Veri çekme ve kaydetme fonksiyonu (max 5 deneme, her deneme arası 5 saniye bekler)
+def fetch_and_save(stock, max_retries=5, wait_seconds=5):
+    retries = 0
+    while retries < max_retries:
+        try:
+            print(f"Çekiliyor: {stock}, Deneme: {retries+1}")
+            data = tv.get_hist(symbol=stock, exchange='BIST', interval=Interval.in_daily, n_bars=3000)
+            if data.empty:
+                raise ValueError("Boş veri geldi")
+            file_path = os.path.join(folder_path, f"{stock}_daily_data.xlsx")
+            data.to_excel(file_path)
+            print(f"Tamamlandı: {stock}")
+            return
+        except Exception as e:
+            print(f"Hata {stock} (Deneme {retries+1}): {e}")
+            retries += 1
+            time.sleep(wait_seconds)
+    print(f"{stock} için maksimum deneme sayısına ulaşıldı, devam ediliyor...")
+
+# Hisse listesi
+stocks = [
+	"A1CAP", "AFYON", "AGESA", "AHGAZ", "AKBNK", "AKGRT", "AKSEN", "ALBRK", 
+	"ALCTL", "ALFAS", "ALTIN", "ANHYT", "ANSGR", "ARASE", "ARDYZ", "ARSAN", 
+	"ASELS", "ASTOR", "ATAGY", "ATATP", "AVHOL", "AYEN", "AYGAZ", "BAGFS", 
+	"BASGZ", "BEYAZ", "BFREN", "BIMAS", "BLCYT", "BNTAS", "BRLSM", "BRYAT", 
+	"CCOLA", "CIMSA", "CLEBI", "CRDFA", "CWENE", "DERIM", "DESA", "DESPC", 
+	"DGATE", "DOCO", "DOHOL", "EDATA", "EFORC", "EGEEN", "EGEPO", "EGGUB", 
+	"EGPRO", "EKGYO", "ELITE", "ENERY", "ENJSA", "ENKAI", "ETILR", "EUPWR", 
+	"EUREN", "FADE", "FLAP", "FORTE", "FROTO", "GARAN", "GARFA", "GEDZA", 
+	"GENIL", "GENTS", "GESAN", "GIPTA", "GLCVY", "GLDTR", "GLYHO", "GMSTR", 
+	"GMTAS", "GOKNR", "GOODY", "GRSEL", "GRTHO", "GSDHO", "GUBRF", "GWIND", 
+	"HALKB", "HLGYO", "HTTBT", "ISCTR", "ISDMR", "ISFIN", "ISKPL", "ISMEN", 
+	"KATMR", "KCAER", "KERVT", "KFEIN", "KLKIM", "KLSYN", "KOZAL", "KRONT", 
+	"KRSTL", "KUTPO", "LIDFA", "LINK", "LKMNH", "LOGO", "LYDYE", "MACKO", 
+	"MAKTK", "MAVI", "MGROS", "MPARK", "MRGYO", "MRSHL", "MSGYO", "MTRKS", 
+	"NTGAZ", "NTHOL", "NUHCM", "ORGE", "OYAKC", "OZGYO", "PAGYO", "PAPIL", 
+	"PASEU", "PENTA", "PETUN", "PLTUR", "PNSUT", "PRKME", "RYGYO", "RYSAS", 
+	"SAHOL", "SANEL", "SEKUR", "SELEC", "SELGD", "SKBNK", "SRVGY", "SUNTK", 
+	"TABGD", "TAVHL", "TBORG", "TCELL", "TDGYO", "TEZOL", "TGSAS", "TMPOL", 
+	"TNZTP", "TRGYO", "TSKB", "TTKOM", "TUCLK", "TUKAS", "TUREX", "TURSG", 
+	"ULKER", "ULUFA", "ULUUN", "VAKBN", "VAKFN", "VBTYZ", "VKGYO", "YAYLA", 
+	"YGGYO", "YKBNK", "YYLGD", "ZRGYO"
+]
+
+# Paralel çalıştırma
+if __name__ == "__main__":
+    clear_folder(folder_path)  # Önce klasörü temizle
+    with Pool(cpu_count()) as p:
+        p.map(fetch_and_save, stocks)
+
+
+import pandas as pd
+import numpy as np
+import os
+from openpyxl import load_workbook
+from openpyxl.styles import PatternFill, Alignment, Font
+from openpyxl.utils import get_column_letter
+from openpyxl import Workbook
+from concurrent.futures import ProcessPoolExecutor
+from tqdm import tqdm
+
+folder_path = "/content/data"
+excel_files = [os.path.join(folder_path, f) for f in os.listdir(folder_path) if f.endswith(".xlsx")]
+
+performance_start_date = pd.Timestamp("2019-01-01")
+
+partial_targets = [
+    (5, 0.03),
+    (8, 0.03),
+    (13, 0.05),
+    (17, 0.05),
+    (21, 0.08),
+    (29, 0.08),
+    (34, 0.13),
+]
+
+def calculate_ema(data, period):
+    """Calculate Exponential Moving Average (EMA)."""
+    return data.ewm(span=period, adjust=False).mean()
+
+def process_file(file_path):
+    df = pd.read_excel(file_path)
+    df['datetime'] = pd.to_datetime(df['datetime'])
+    df = df.sort_values('datetime').reset_index(drop=True)
+
+    close = df['close']
+    length = 133
+    len_smma = 7
+    a = 4 / (length + 2)
+    ema_length = int(length / 2)
+    alpha = 2 / (ema_length + 1)
+
+    s = []
+    ema_now = close.iloc[:ema_length].mean()
+    prev_s = close.iloc[0]
+
+    for i in range(len(close)):
+        if i == 0:
+            s_now = close.iloc[0]
+        else:
+            ema_input = prev_s
+            ema_now = alpha * ema_input + (1 - alpha) * ema_now
+            s_now = (a * close.iloc[i]) + prev_s - (a * ema_now)
+        s.append(s_now)
+        prev_s = s_now
+
+    smma_list = []
+    prev_smma = None
+    for i in range(len(close)):
+        if i < len_smma - 1:
+            smma_list.append(None)
+        elif i == len_smma - 1:
+            sma = close.iloc[:len_smma].mean()
+            smma_list.append(sma)
+            prev_smma = sma
+        else:
+            smma_now = (prev_smma * (len_smma - 1) + close.iloc[i]) / len_smma
+            smma_list.append(smma_now)
+            prev_smma = smma_now
+
+    pos = [np.nan] * len(close)
+    for i in range(1, len(close)):
+        if smma_list[i-1] is not None and s[i-1] is not None:
+            if smma_list[i-1] < s[i-1] and smma_list[i] > s[i]:
+                pos[i] = 1
+            elif smma_list[i-1] > s[i-1] and smma_list[i] < s[i]:
+                pos[i] = -1
+            else:
+                pos[i] = pos[i-1] if i > 0 else np.nan
+        else:
+            pos[i] = pos[i-1] if i > 0 else np.nan
+    df['pos'] = pos
+
+    # Pearson hesaplama
+    pearson_values = {}
+    periods = [55, 144, 233, 89]  # 89 ekledik
+    for period in periods:
+        if len(df) >= period:
+            y = df['close'].tail(period)
+            X = np.array(range(period)).reshape(-1, 1)  # Zaman dizisi
+            pearson_coefficient = np.corrcoef(X.T[0], y)[0, 1]
+            pearson_values[f'Pearson {period} Gün'] = pearson_coefficient
+        else:
+            pearson_values[f'Pearson {period} Gün'] = None  # Yetersiz veri olduğunda None ekle
+
+    successful_count = 0
+    failed_count = 0
+
+    entry_price = None
+    entry_date = None
+    remaining_lot = 0
+    partial_targets_hit = set()
+
+    start_idx = df[df['datetime'] >= performance_start_date].index.min()
+    if start_idx is None:
+        start_idx = 0
+
+    for i in range(start_idx, len(df) - 1):
+        if df.loc[i, 'pos'] == 1 and (i == 0 or df.loc[i - 1, 'pos'] != 1):
+            entry_price = df.loc[i + 1, 'open']
+            entry_date = df.loc[i + 1, 'datetime']
+            remaining_lot = 1.0
+            partial_targets_hit.clear()
+
+        elif df.loc[i, 'pos'] == -1 and (i == 0 or df.loc[i - 1, 'pos'] != -1) and entry_price is not None:
+            exit_price = df.loc[i + 1, 'open']
+            exit_date = df.loc[i + 1, 'datetime']
+
+            if entry_date >= performance_start_date:
+                profit_pct = ((exit_price - entry_price) / entry_price) * 100
+                if profit_pct > 0:
+                    successful_count += 1
+                else:
+                    failed_count += 1
+
+            entry_price = None
+            remaining_lot = 0
+            partial_targets_hit.clear()
+
+        elif entry_price is not None and remaining_lot > 0:
+            current_price = df.loc[i, 'high']
+            for pct, lot_frac in partial_targets:
+                if pct not in partial_targets_hit:
+                    target_price = entry_price * (1 + pct / 100)
+                    if current_price >= target_price:
+                        partial_targets_hit.add(pct)
+                        remaining_lot -= lot_frac
+                        if remaining_lot < 0:
+                            remaining_lot = 0
+                        successful_count += 1
+                        break
+
+    total_trades = successful_count + failed_count
+    profitability_pct = (successful_count / total_trades * 100) if total_trades > 0 else 0
+
+    last_pos = df['pos'].dropna().iloc[-1] if not df['pos'].dropna().empty else np.nan
+    signal = "AL" if last_pos == 1 else "SAT" if last_pos == -1 else "TUT"
+    signal_index = df[df['pos'] == last_pos].index[-1] if not df[df['pos'] == last_pos].empty else 0
+
+    for i in reversed(range(signal_index)):
+        if df.loc[i, 'pos'] != last_pos:
+            signal_date = df.loc[i + 1, 'datetime']
+            bars_since = len(df) - (i + 1) - 1
+            break
+    else:
+        signal_date = df.loc[0, 'datetime']
+        bars_since = len(df) - 1
+
+    hisse_adi = os.path.basename(file_path).replace('_daily_data.xlsx', '').replace('.xlsx', '')
+
+    # EMA hesaplama
+    df['EMA8'] = calculate_ema(df['close'], 8)
+    df['EMA13'] = calculate_ema(df['close'], 13)
+    df['EMA21'] = calculate_ema(df['close'], 21)
+    df['EMA34'] = calculate_ema(df['close'], 34)
+    df['EMA55'] = calculate_ema(df['close'], 55)
+    df['EMA89'] = calculate_ema(df['close'], 89)
+    df['EMA144'] = calculate_ema(df['close'], 144)
+    df['EMA233'] = calculate_ema(df['close'], 233)
+
+    # "UP" kontrolü
+    last_row = df.iloc[-1]
+    closing_price = last_row['close']
+    all_above = all(closing_price > last_row[ema] for ema in [
+        'EMA8', 'EMA13', 'EMA21', 'EMA34', 'EMA55', 'EMA89', 'EMA144', 'EMA233'
+    ])
+
+    # "IDEAL UP" kontrolü
+    ideal_up = (closing_price > last_row['EMA8'] and
+                last_row['EMA8'] > last_row['EMA13'] and
+                last_row['EMA13'] > last_row['EMA21'] and
+                last_row['EMA21'] > last_row['EMA34'] and
+                last_row['EMA34'] > last_row['EMA55'] and
+                last_row['EMA55'] > last_row['EMA89'] and
+                last_row['EMA89'] > last_row['EMA144'] and
+                last_row['EMA144'] > last_row['EMA233'])
+
+    # Durumu L ve M sütunlarına ekleyin
+    if all_above:
+        df['UP'] = 'UP'
+    else:
+        df['UP'] = None
+
+    if ideal_up:
+        df['IDEAL UP'] = 'IDEAL UP'
+    else:
+        df['IDEAL UP'] = None
+
+    # Pearson değerlerini tabloya ekle
+    df['PEARSON 55'] = pearson_values.get('Pearson 55 Gün', None)
+    df['PEARSON 89'] = pearson_values.get('Pearson 89 Gün', None)
+    df['PEARSON 144'] = pearson_values.get('Pearson 144 Gün', None)
+    df['PEARSON 233'] = pearson_values.get('Pearson 233 Gün', None)
+
+    # Sayı formatını Excel hücre formatı olarak ayarlama (I, J, K sütunları)
+    df['PEARSON 55'] = pd.to_numeric(df['PEARSON 55'], errors='coerce')
+    df['PEARSON 89'] = pd.to_numeric(df['PEARSON 89'], errors='coerce')
+    df['PEARSON 144'] = pd.to_numeric(df['PEARSON 144'], errors='coerce')
+    df['PEARSON 233'] = pd.to_numeric(df['PEARSON 233'], errors='coerce')
+
+    return {
+        "Hisse": hisse_adi,
+        "Tarih": signal_date,
+        "Sinyal": signal,
+        "Geçen Mum": bars_since,
+        "Toplam İşlem Sayısı": total_trades,
+        "Başarılı İşlem Sayısı": successful_count,
+        "Başarısız İşlem Sayısı": failed_count,
+        "Kar %": round(profitability_pct, 2),
+        "PEARSON 55": df['PEARSON 55'].iloc[-1],
+        "PEARSON 89": df['PEARSON 89'].iloc[-1],
+        "PEARSON 144": df['PEARSON 144'].iloc[-1],
+        "PEARSON 233": df['PEARSON 233'].iloc[-1],
+        "UP": df['UP'].iloc[-1],
+        "IDEAL UP": df['IDEAL UP'].iloc[-1],
+    }
+
+def export_results(results_df, output_path):
+    results_df['Tarih'] = pd.to_datetime(results_df['Tarih'])
+    results_df = results_df.sort_values(by='Tarih', ascending=False)
+    results_df['Tarih'] = results_df['Tarih'].dt.strftime('%d.%m.%Y')
+
+    results_df.to_excel(output_path, index=False)
+    wb = load_workbook(output_path)
+    ws = wb.active
+
+    # Sayısal format için hücre biçimi ayarlama
+    for row in ws.iter_rows(min_row=2, min_col=9, max_col=12):  # I, J, K, L sütunları
+        for cell in row:
+            cell.number_format = '0.00'  # Sayıları iki ondalıklı biçimde göster
+
+    ws.auto_filter.ref = ws.dimensions
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+
+    ws.column_dimensions['A'].width = 15
+    for col in ws.iter_cols(min_col=2, max_col=ws.max_column):
+        col_letter = get_column_letter(col[0].column)
+        ws.column_dimensions[col_letter].width = 17
+
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row, max_col=ws.max_column):
+        sinyal = row[2].value
+        bars_since = int(row[3].value)
+        for cell in row:
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+        if bars_since == 0:
+            fill_color = "C6EFCE" if sinyal == "AL" else "FFC7CE" if sinyal == "SAT" else None
+            if fill_color:
+                fill = PatternFill(start_color=fill_color, end_color=fill_color, fill_type="solid")
+                for cell in row:
+                    cell.fill = fill
+
+    wb.save(output_path)
+    print("✅ Excel başarıyla kaydedildi:", output_path)
+
+def main():
+    with ProcessPoolExecutor() as executor:
+        results = list(tqdm(executor.map(process_file, excel_files), total=len(excel_files), desc="Dosyalar işleniyor"))
+
+    filtered_results = [r for r in results if r is not None]
+    if not filtered_results:
+        print("Hiç sinyal bulunamadı.")
+        return
+
+    df_results = pd.DataFrame(filtered_results)
+    df_results["Geçen Mum"] = df_results["Geçen Mum"].astype(int)
+
+    # Hem Geçen Mum 0 olan hem Sinyal AL veya SAT olanları filtreliyoruz
+    final_df = df_results[(df_results["Geçen Mum"] == 0) & (df_results["Sinyal"].isin(["AL", "SAT"]))].copy()
+
+    if final_df.empty:
+        print("Son gün AL veya SAT sinyali veren hisse bulunamadı.")
+        return
+
+    output_dir = "/content/output"
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, "ABAKÜS.xlsx")
+    export_results(final_df, output_path)
+
+if __name__ == '__main__':
+    main()
+
+
+import pandas as pd
+import numpy as np
+import os
+from openpyxl import load_workbook
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
+from concurrent.futures import ProcessPoolExecutor
+from tqdm import tqdm
+import multiprocessing
+from sklearn.linear_model import LinearRegression
+
+performance_start_date = pd.Timestamp("2019-01-01")
+
+partial_targets = [
+    (12, 0.10),
+    (20, 0.15),
+]
+
+def calculate_ema(series, period):
+    """Calculate Exponential Moving Average."""
+    return series.ewm(span=period, adjust=False).mean()
+
+def custom_ema(series, period):
+    ema = [series.iloc[0]]
+    sf = 2 / (period + 1)
+    for price in series.iloc[1:]:
+        ema.append(ema[-1] + sf * (price - ema[-1]))
+    return pd.Series(ema, index=series.index)
+
+def custom_sma(series, period):
+    cum_sum = series.cumsum()
+    shifted_cum_sum = cum_sum.shift(period)
+    sma = (cum_sum - shifted_cum_sum) / period
+    return sma
+
+def custom_atr(df, period):
+    high = df['high']
+    low = df['low']
+    close = df['close']
+
+    tr1 = high - low
+    tr2 = (high - close.shift(1)).abs()
+    tr3 = (low - close.shift(1)).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+    atr = [tr.iloc[0]]
+    for value in tr.iloc[1:]:
+        atr.append(atr[-1] + (value - atr[-1]) / period)
+    return pd.Series(atr, index=df.index)
+
+def calculate_pearson(df, periods): 
+    """Calculate Pearson correlation coefficient for the given periods."""
+    pearson_values = {}
+    for period in periods:
+        if len(df) >= period:
+            y = df['close'].tail(period)
+            X = np.array(range(period)).reshape(-1, 1)  # Zaman dizisi
+            model = LinearRegression().fit(X, y)
+            pearson_coefficient = np.corrcoef(X.T[0], y)[0, 1]
+            pearson_values[f'Pearson {period} Gün'] = round(pearson_coefficient, 2)  # Yuvarla
+        else:
+            pearson_values[f'Pearson {period} Gün'] = None  # Yetersiz veri olduğunda None ekle
+    return pearson_values
+
+def check_ema_up(df):
+    """Check for EMA 'UP' and 'IDEAL UP' conditions."""
+    last_row = df.iloc[-1]
+    closing_price = last_row['close']
+    
+    # "UP" durumu kontrolü
+    all_above = all(closing_price > last_row[ema] for ema in [
+        'EMA8', 'EMA13', 'EMA21', 'EMA34', 'EMA55', 'EMA89', 'EMA144', 'EMA233'
+    ])
+    
+    # "IDEAL UP" durumu kontrolü
+    ideal_up = (closing_price > last_row['EMA8'] and
+                last_row['EMA8'] > last_row['EMA13'] and
+                last_row['EMA13'] > last_row['EMA21'] and
+                last_row['EMA21'] > last_row['EMA34'] and
+                last_row['EMA34'] > last_row['EMA55'] and
+                last_row['EMA55'] > last_row['EMA89'] and
+                last_row['EMA89'] > last_row['EMA144'] and
+                last_row['EMA144'] > last_row['EMA233'])
+    
+    return all_above, ideal_up
+
+def process_file(file_path):
+    df = pd.read_excel(file_path)
+    df = df.sort_values('datetime').reset_index(drop=True)
+
+    # Sadece hisse kodunu al
+    df['symbol'] = df['symbol'].apply(lambda x: x.split(':')[1] if isinstance(x, str) else x)
+
+    # EMA hesaplamaları
+    df['EMA8'] = calculate_ema(df['close'], 8)
+    df['EMA13'] = calculate_ema(df['close'], 13)
+    df['EMA21'] = calculate_ema(df['close'], 21)
+    df['EMA34'] = calculate_ema(df['close'], 34)
+    df['EMA55'] = calculate_ema(df['close'], 55)
+    df['EMA89'] = calculate_ema(df['close'], 89)
+    df['EMA144'] = calculate_ema(df['close'], 144)
+    df['EMA233'] = calculate_ema(df['close'], 233)
+
+    # PEARSON hesaplamaları
+    periods = [55, 89, 144, 233]
+    pearson_values = calculate_pearson(df, periods)
+
+    # EMA UP ve IDEAL UP kontrolü
+    all_above, ideal_up = check_ema_up(df)
+
+    # Verileri df'ye ekle
+    for key, value in pearson_values.items():
+        df[key] = value
+
+    df['All Above EMA'] = all_above
+    df['Ideal Up'] = ideal_up
+
+    df['oncu1'] = df['close'].ewm(span=34, adjust=False).mean()
+    df['oncu2'] = df['close'].rolling(window=34).mean()
+
+    df['fast_ma'] = custom_ema(df['close'], 3)
+    df['slow_ma'] = custom_ema(df['close'], 5)
+    df['macd'] = df['fast_ma'] - df['slow_ma']
+    df['signal'] = custom_sma(df['macd'], 2)
+    df['hist'] = df['macd'] - df['signal']
+
+    df['atr'] = custom_atr(df, 17)
+
+    df['entry_long'] = (df['macd'] > df['signal']) & (df['macd'].shift(1) <= df['signal'].shift(1)) & (df['oncu2'] < df['oncu1'])
+    df['entry_price_long'] = np.where(df['entry_long'], df['close'], np.nan)
+    df['entry_price_long'] = df['entry_price_long'].ffill()
+    df['sl_floating_long'] = df['entry_price_long'] - 2.2 * df['atr']
+    df['exit_long'] = df['close'] < df['sl_floating_long']
+
+    is_long = False
+    last_action = None
+    positions = []
+    signal_types = []
+    last_sat_index = None
+
+    for idx, row in df.iterrows():
+        if row['entry_long'] and last_action != 'AL':
+            if last_sat_index is not None and idx - last_sat_index <= 5:
+                is_long = True
+                positions.append('AL')
+                signal_types.append('ASLİ')
+                last_action = 'AL'
+            else:
+                is_long = True
+                positions.append('AL')
+                signal_types.append('YEDEK')
+                last_action = 'AL'
+        elif row['exit_long'] and is_long and last_action != 'SAT':
+            is_long = False
+            positions.append('SAT')
+            signal_types.append('YEDEK')
+            last_action = 'SAT'
+            last_sat_index = idx
+        else:
+            positions.append(np.nan)
+            signal_types.append(np.nan)
+
+    df['pos'] = positions
+    df['signal_type'] = signal_types
+
+    successful_count = 0
+    failed_count = 0
+
+    entry_price = None
+    entry_date = None
+    remaining_lot = 0
+    partial_targets_hit = set()
+
+    start_idx = df[df['datetime'] >= performance_start_date].index.min()
+    if start_idx is None:
+        start_idx = 0
+
+    for i in range(start_idx, len(df) - 1):
+        if df.loc[i, 'pos'] == 'AL' and (i == 0 or df.loc[i - 1, 'pos'] != 'AL'):
+            entry_price = df.loc[i + 1, 'open']
+            entry_date = df.loc[i + 1, 'datetime']
+            remaining_lot = 1.0
+            partial_targets_hit.clear()
+
+        elif df.loc[i, 'pos'] == 'SAT' and (i == 0 or df.loc[i - 1, 'pos'] != 'SAT') and entry_price is not None:
+            exit_price = df.loc[i + 1, 'open']
+            exit_date = df.loc[i + 1, 'datetime']
+
+            if entry_date >= performance_start_date:
+                profit_pct = ((exit_price - entry_price) / entry_price) * 100
+                if profit_pct > 0:
+                    successful_count += 1
+                else:
+                    failed_count += 1
+
+            entry_price = None
+            remaining_lot = 0
+            partial_targets_hit.clear()
+
+        elif entry_price is not None and remaining_lot > 0:
+            current_price = df.loc[i, 'high']
+            for pct, lot_frac in partial_targets:
+                if pct not in partial_targets_hit:
+                    target_price = entry_price * (1 + pct / 100)
+                    if current_price >= target_price:
+                        partial_targets_hit.add(pct)
+                        remaining_lot -= lot_frac
+                        if remaining_lot < 0:
+                            remaining_lot = 0
+                        successful_count += 1
+                        break
+
+    total_trades = successful_count + failed_count
+    profitability_pct = (successful_count / total_trades * 100) if total_trades > 0 else 0
+
+    signals_df = df.dropna(subset=['pos'])
+    if not signals_df.empty:
+        last_signal_date = signals_df['datetime'].iloc[-1].date()
+        candles_since_last_signal = len(df) - signals_df.index[-1] - 1
+        last_position = signals_df['pos'].iloc[-1]
+        last_signal_type = signals_df['signal_type'].iloc[-1]
+    else:
+        last_signal_date = None
+        candles_since_last_signal = None
+        last_position = None
+        last_signal_type = None
+
+    return {
+        "Hisse": df['symbol'].iloc[0] if 'symbol' in df.columns else os.path.basename(file_path).replace('.xlsx',''),
+        "Tarih": last_signal_date,
+        "Sinyal": last_position,
+        "Geçen Mum": candles_since_last_signal,
+        "Sinyal Türü": last_signal_type,  # Sinyal türünü ekliyoruz
+        "Toplam İşlem Sayısı": total_trades,
+        "Başarılı İşlem Sayısı": successful_count,
+        "Başarısız İşlem Sayısı": failed_count,
+        "Kar %": round(profitability_pct, 2),
+        **pearson_values,  # Pearson değerlerini ekle
+        "EMA UP": all_above,
+        "IDEAL UP": ideal_up
+    }
+
+def export_results(results_df, output_path):
+    results_df['Tarih'] = pd.to_datetime(results_df['Tarih'])
+    results_df = results_df.sort_values(by='Tarih', ascending=False)
+    results_df['Tarih'] = results_df['Tarih'].dt.strftime('%d.%m.%Y')
+
+    results_df.to_excel(output_path, index=False)
+    wb = load_workbook(output_path)
+    ws = wb.active
+
+    ws.auto_filter.ref = ws.dimensions
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+
+    ws.column_dimensions['A'].width = 15
+    for col in ws.iter_cols(min_col=2, max_col=ws.max_column):
+        col_letter = get_column_letter(col[0].column)
+        ws.column_dimensions[col_letter].width = 17
+
+    green_fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
+    red_fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')
+    center_alignment = Alignment(horizontal='center', vertical='center')
+
+    # Pearson ve diğer sayısal sütunları yuvarla
+    for col in ['I', 'J', 'K', 'L']:
+        for row in ws[col]:
+            try:
+                row.value = round(float(row.value), 2)  # Sayısal değeri float'a çevir ve 2 basamağa yuvarla
+            except ValueError:
+                pass  # Hata alırsak geçeriz
+
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row, max_col=ws.max_column):
+        sinyal = row[2].value
+        bars_since = int(row[3].value)
+        for cell in row:
+            cell.alignment = center_alignment
+        if bars_since == 0:
+            fill_color = green_fill if sinyal == "AL" else red_fill if sinyal == "SAT" else None
+            if fill_color:
+                for cell in row:
+                    cell.fill = fill_color
+
+    wb.save(output_path)
+    print(f"✅ Tüm işlemler tamamlandı! Sonuç dosyası: {output_path}")
+
+def main():
+    input_folder = "/content/data"
+    output_dir = "/content/output"
+    os.makedirs(output_dir, exist_ok=True)
+    output_file = os.path.join(output_dir, 'MAT-R.xlsx')
+
+    files = [os.path.join(input_folder, f) for f in os.listdir(input_folder) if f.endswith('.xlsx')]
+
+    with multiprocessing.Pool() as pool:
+        all_results = list(tqdm(pool.imap(process_file, files), total=len(files), desc="Processing Files"))
+
+    results_df = pd.DataFrame(all_results)
+    filtered_results = results_df[results_df['Geçen Mum'] == 0].copy()
+    filtered_results = filtered_results[filtered_results['Sinyal'].isin(['AL', 'SAT'])]
+
+    filtered_results.sort_values(['Sinyal', 'Hisse'], inplace=True)
+
+    export_results(filtered_results, output_file)
+
+if __name__ == "__main__":
+    main()
+
+import pandas as pd
+import numpy as np
+import os
+from openpyxl import load_workbook
+from openpyxl.styles import PatternFill, Alignment, Font
+from openpyxl.utils import get_column_letter
+from concurrent.futures import ProcessPoolExecutor
+from tqdm import tqdm
+
+folder_path = "/content/data"
+excel_files = [os.path.join(folder_path, f) for f in os.listdir(folder_path) if f.endswith(".xlsx")]
+
+performance_start_date = pd.Timestamp("2019-01-01")
+
+partial_targets = [
+    (13, 0.05),
+    (24, 0.05),
+    (34, 0.08),
+    (55, 0.13),
+]
+
+def calculate_rma(series, length):
+    alpha = 1 / length
+    rma = np.zeros_like(series)
+    rma[0] = series[0]
+    for i in range(1, len(series)):
+        rma[i] = alpha * series[i] + (1 - alpha) * rma[i - 1]
+    return rma
+
+def calculate_rsi(up_rma, down_rma):
+    mask_down_zero = (down_rma == 0)
+    mask_up_zero = (up_rma == 0)
+    mask_normal = ~(mask_down_zero | mask_up_zero)
+
+    result = np.zeros_like(up_rma)
+    result[mask_down_zero] = 100.0
+    result[mask_up_zero] = 0.0
+    result[mask_normal] = 100.0 - (100.0 / (1.0 + up_rma[mask_normal] / down_rma[mask_normal]))
+
+    return result
+
+def calculate_mfi(high, low, close, volume, length):
+    typical_price = (high + low + close) / 3
+    money_flow = typical_price * volume
+
+    positive_flow = np.zeros_like(money_flow)
+    negative_flow = np.zeros_like(money_flow)
+
+    for i in range(1, len(typical_price)):
+        if typical_price[i] > typical_price[i - 1]:
+            positive_flow[i] = money_flow[i]
+        elif typical_price[i] < typical_price[i - 1]:
+            negative_flow[i] = money_flow[i]
+
+    positive_flow_sum = pd.Series(positive_flow).rolling(window=length).sum().values
+    negative_flow_sum = pd.Series(negative_flow).rolling(window=length).sum().values
+
+    mask_neg_zero = (negative_flow_sum == 0)
+    mask_pos_zero = (positive_flow_sum == 0)
+    mask_normal = ~(mask_neg_zero | mask_pos_zero)
+
+    result = np.zeros_like(positive_flow_sum)
+    result[mask_neg_zero] = 100.0
+    result[mask_pos_zero] = 0.0
+    result[mask_normal] = 100.0 - (100.0 / (1.0 + positive_flow_sum[mask_normal] / negative_flow_sum[mask_normal]))
+
+    return result
+
+def calculate_ema(data, period):
+    """Calculate Exponential Moving Average (EMA)."""
+    return data.ewm(span=period, adjust=False).mean()
+
+def process_file(file_path):
+    df = pd.read_excel(file_path)
+    df = df.rename(columns={'datetime': 'date'})
+    df['date'] = pd.to_datetime(df['date'])
+    df = df.sort_values('date').reset_index(drop=True)
+
+    close = df['close'].values
+    high = df['high'].values
+    low = df['low'].values
+    volume = df['volume'].values
+
+    # Calculate RSI and MFI (for the current code context)
+    length = 13
+    pmom = 58
+    nmom = 30
+
+    change = np.diff(close, prepend=close[0])
+    up_change = np.maximum(change, 0)
+    down_change = -np.minimum(change, 0)
+
+    up_rma = calculate_rma(up_change, length)
+    down_rma = calculate_rma(down_change, length)
+    rsi = calculate_rsi(up_rma, down_rma)
+    mfi = calculate_mfi(high, low, close, volume, length)
+    rsi_mfi = (rsi + mfi) / 2
+
+    ema5 = pd.Series(close).ewm(span=5, adjust=False).mean().values
+    ema5_change = np.diff(ema5, prepend=ema5[0])
+
+    p_mom = np.zeros(len(close), dtype=bool)
+    n_mom = np.zeros(len(close), dtype=bool)
+
+    for i in range(1, len(close)):
+        p_mom[i] = (rsi_mfi[i - 1] < pmom and 
+                    rsi_mfi[i] > pmom and 
+                    rsi_mfi[i] > nmom and 
+                    ema5_change[i] > 0)
+
+        n_mom[i] = (rsi_mfi[i] < nmom and ema5_change[i] < 0)
+
+    pos = np.full(len(close), np.nan)
+    for i in range(len(close)):
+        if p_mom[i]:
+            pos[i] = 1
+        elif n_mom[i]:
+            pos[i] = -1
+        elif i > 0:
+            pos[i] = pos[i-1]
+
+    df['pos'] = pos
+
+    successful_count = 0
+    failed_count = 0
+
+    entry_price = None
+    entry_date = None
+    remaining_lot = 0
+    partial_targets_hit = set()
+
+    start_idx = df[df['date'] >= performance_start_date].index.min()
+
+    for i in range(start_idx, len(df) - 1):
+        if df.loc[i, 'pos'] == 1 and (i == 0 or df.loc[i - 1, 'pos'] != 1):
+            entry_price = df.loc[i + 1, 'open']
+            entry_date = df.loc[i + 1, 'date']
+            remaining_lot = 1.0
+            partial_targets_hit.clear()
+
+        elif df.loc[i, 'pos'] == -1 and (i == 0 or df.loc[i - 1, 'pos'] != -1) and entry_price is not None:
+            exit_price = df.loc[i + 1, 'open']
+            exit_date = df.loc[i + 1, 'date']
+
+            if entry_date >= performance_start_date:
+                profit_pct = ((exit_price - entry_price) / entry_price) * 100
+                if profit_pct > 0:
+                    successful_count += 1
+                else:
+                    failed_count += 1
+
+            entry_price = None
+            remaining_lot = 0
+            partial_targets_hit.clear()
+
+        elif entry_price is not None and remaining_lot > 0:
+            current_price = df.loc[i, 'high']
+            for pct, lot_frac in partial_targets:
+                if pct not in partial_targets_hit:
+                    target_price = entry_price * (1 + pct / 100)
+                    if current_price >= target_price:
+                        partial_targets_hit.add(pct)
+                        remaining_lot -= lot_frac
+                        if remaining_lot < 0:
+                            remaining_lot = 0
+                        successful_count += 1
+                        break
+
+    total_trades = successful_count + failed_count
+    profitability_pct = (successful_count / total_trades * 100) if total_trades > 0 else 0
+
+    last_pos = df['pos'].dropna().iloc[-1]
+    signal = "AL" if last_pos == 1 else "SAT" if last_pos == -1 else "TUT"
+    signal_index = df[df['pos'] == last_pos].index[-1]
+
+    for i in reversed(range(signal_index)):
+        if df.loc[i, 'pos'] != last_pos:
+            signal_date = df.loc[i + 1, 'date']
+            bars_since = int(len(df) - (i + 1)) - 1
+            break
+    else:
+        signal_date = df.loc[0, 'date']
+        bars_since = int(len(df)) - 1
+
+    hisse_adi = os.path.basename(file_path).replace("_daily_data.xlsx", "").replace(".xlsx", "")
+
+    # PEARSON hesaplamaları (55, 89, 144, 233)
+    pearson_values = {}
+    periods = [55, 89, 144, 233]
+    for period in periods:
+        if len(df) >= period:
+            y = df['close'].tail(period)
+            X = np.array(range(period)).reshape(-1, 1)
+            pearson_coefficient = np.corrcoef(X.T[0], y)[0, 1]
+            pearson_values[f'Pearson {period} Gün'] = round(pearson_coefficient, 2)  # Yuvarlama işlemi
+        else:
+            pearson_values[f'Pearson {period} Gün'] = None
+
+    # EMA hesaplamaları
+    df['EMA8'] = calculate_ema(df['close'], 8)
+    df['EMA13'] = calculate_ema(df['close'], 13)
+    df['EMA21'] = calculate_ema(df['close'], 21)
+    df['EMA34'] = calculate_ema(df['close'], 34)
+    df['EMA55'] = calculate_ema(df['close'], 55)
+    df['EMA89'] = calculate_ema(df['close'], 89)
+    df['EMA144'] = calculate_ema(df['close'], 144)
+    df['EMA233'] = calculate_ema(df['close'], 233)
+
+    # "UP" kontrolü
+    last_row = df.iloc[-1]
+    closing_price = last_row['close']
+    all_above = all(closing_price > last_row[ema] for ema in [
+        'EMA8', 'EMA13', 'EMA21', 'EMA34', 'EMA55', 'EMA89', 'EMA144', 'EMA233'
+    ])
+
+    # "IDEAL UP" kontrolü
+    ideal_up = (closing_price > last_row['EMA8'] and
+                last_row['EMA8'] > last_row['EMA13'] and
+                last_row['EMA13'] > last_row['EMA21'] and
+                last_row['EMA21'] > last_row['EMA34'] and
+                last_row['EMA34'] > last_row['EMA55'] and
+                last_row['EMA55'] > last_row['EMA89'] and
+                last_row['EMA89'] > last_row['EMA144'] and
+                last_row['EMA144'] > last_row['EMA233'])
+
+    # Durumu sütunlara ekleyin
+    if all_above:
+        df['UP'] = 'UP'
+    else:
+        df['UP'] = None
+
+    if ideal_up:
+        df['IDEAL UP'] = 'IDEAL UP'
+    else:
+        df['IDEAL UP'] = None
+
+    # Verileri döndür
+    return {
+        "Hisse": hisse_adi,
+        "Tarih": signal_date,
+        "Sinyal": signal,
+        "Geçen Mum": bars_since,
+        "Toplam İşlem Sayısı": total_trades,
+        "Başarılı İşlem Sayısı": successful_count,
+        "Başarısız İşlem Sayısı": failed_count,
+        "Kar %": round(profitability_pct, 2),
+        "PEARSON 55": pearson_values.get('Pearson 55 Gün', None),
+        "PEARSON 89": pearson_values.get('Pearson 89 Gün', None),
+        "PEARSON 144": pearson_values.get('Pearson 144 Gün', None),
+        "PEARSON 233": pearson_values.get('Pearson 233 Gün', None),
+        "UP": df['UP'].iloc[-1],
+        "IDEAL UP": df['IDEAL UP'].iloc[-1],
+    }
+
+def export_results(results_df, output_path):
+    results_df['Tarih'] = pd.to_datetime(results_df['Tarih'])
+    results_df = results_df.sort_values(by='Tarih', ascending=False)
+    results_df['Tarih'] = results_df['Tarih'].dt.strftime('%d.%m.%Y')
+
+    results_df.to_excel(output_path, index=False)
+    wb = load_workbook(output_path)
+    ws = wb.active
+
+    ws.auto_filter.ref = ws.dimensions
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+
+    ws.column_dimensions['A'].width = 15
+    for col in ws.iter_cols(min_col=2, max_col=ws.max_column):
+        col_letter = get_column_letter(col[0].column)
+        ws.column_dimensions[col_letter].width = 17
+
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row, max_col=ws.max_column):
+        sinyal = row[2].value
+        bars_since = int(row[3].value)
+        for cell in row:
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+        if bars_since == 0:
+            fill_color = "C6EFCE" if sinyal == "AL" else "FFC7CE" if sinyal == "SAT" else None
+            if fill_color:
+                fill = PatternFill(start_color=fill_color, end_color=fill_color, fill_type="solid")
+                for cell in row:
+                    cell.fill = fill
+
+    wb.save(output_path)
+    print("✅ Excel başarıyla kaydedildi:", output_path)
+
+def main():
+    with ProcessPoolExecutor() as executor:
+        results = list(tqdm(executor.map(process_file, excel_files), total=len(excel_files), desc="Dosyalar işleniyor"))
+
+    df_results = pd.DataFrame(results)
+    df_results["Geçen Mum"] = df_results["Geçen Mum"].astype(int)
+
+    final_df = df_results[(df_results["Geçen Mum"] == 0) & (df_results["Sinyal"].isin(["AL", "SAT"]))].copy()
+
+    output_dir = "/content/output"
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, "TREF.xlsx")
+    export_results(final_df, output_path)
+
+if __name__ == '__main__':
+    main()
+
+import pandas as pd
+import numpy as np
+import os
+from openpyxl import load_workbook
+from openpyxl.styles import PatternFill, Alignment, Font
+from openpyxl.utils import get_column_letter
+from concurrent.futures import ProcessPoolExecutor
+from tqdm import tqdm
+from sklearn.linear_model import LinearRegression
+
+folder_path = "/content/data"
+excel_files = [os.path.join(folder_path, f) for f in os.listdir(folder_path) if f.endswith(".xlsx")]
+
+performance_start_date = pd.Timestamp("2019-01-01")
+
+partial_targets = [
+    (13, 0.08),
+    (21, 0.13),
+    (29, 0.21),
+    (34, 0.34),
+]
+
+def calculate_ema(series, period):
+    """Calculate Exponential Moving Average."""
+    return series.ewm(span=period, adjust=False).mean()
+
+def calculate_pearson(df, periods): 
+    """Calculate Pearson correlation coefficient for the given periods."""
+    pearson_values = {}
+    for period in periods:
+        if len(df) >= period:
+            y = df['close'].tail(period)
+            X = np.array(range(period)).reshape(-1, 1)  # Zaman dizisi
+            model = LinearRegression().fit(X, y)
+            pearson_coefficient = np.corrcoef(X.T[0], y)[0, 1]
+            pearson_values[f'Pearson {period} Gün'] = round(pearson_coefficient, 2)  # Yuvarla
+        else:
+            pearson_values[f'Pearson {period} Gün'] = None  # Yetersiz veri olduğunda None ekle
+    return pearson_values
+
+def check_ema_up(df):
+    """Check for EMA 'UP' and 'IDEAL UP' conditions."""
+    last_row = df.iloc[-1]
+    closing_price = last_row['close']
+    
+    # "UP" durumu kontrolü
+    all_above = all(closing_price > last_row[ema] for ema in [
+        'EMA8', 'EMA13', 'EMA21', 'EMA34', 'EMA55', 'EMA89', 'EMA144', 'EMA233'
+    ])
+    
+    # "IDEAL UP" durumu kontrolü
+    ideal_up = (closing_price > last_row['EMA8'] and
+                last_row['EMA8'] > last_row['EMA13'] and
+                last_row['EMA13'] > last_row['EMA21'] and
+                last_row['EMA21'] > last_row['EMA34'] and
+                last_row['EMA34'] > last_row['EMA55'] and
+                last_row['EMA55'] > last_row['EMA89'] and
+                last_row['EMA89'] > last_row['EMA144'] and
+                last_row['EMA144'] > last_row['EMA233'])
+    
+    return all_above, ideal_up
+
+def process_file(file_path):
+    df = pd.read_excel(file_path)
+    df = df.rename(columns={'datetime': 'date'})
+    df['date'] = pd.to_datetime(df['date'])
+    df = df.sort_values('date').reset_index(drop=True)
+
+    prev_close = df['close'].shift(1)
+    tr = pd.concat([df['high'] - df['low'], (df['high'] - prev_close).abs(), (df['low'] - prev_close).abs()], axis=1).max(axis=1)
+
+    length = 21
+    atr = tr.copy()
+    atr.iloc[length - 1] = tr.iloc[:length].mean()
+    for i in range(length, len(tr)):
+        atr.iloc[i] = (atr.iloc[i - 1] * (length - 1) + tr.iloc[i]) / length
+
+    df['ATR_21'] = atr
+    df['nLoss'] = 5.1 * df['ATR_21']
+    df['xStop'] = np.nan
+    df['pos'] = np.nan
+
+    for i in range(1, len(df)):
+        prev_xStop = df.loc[i - 1, 'xStop']
+        if pd.isna(prev_xStop):
+            df.loc[i, 'xStop'] = df.loc[i, 'close'] + df.loc[i, 'nLoss']
+            continue
+
+        if df.loc[i, 'close'] > prev_xStop and df.loc[i - 1, 'close'] > prev_xStop:
+            df.loc[i, 'xStop'] = max(prev_xStop, df.loc[i, 'close'] - df.loc[i, 'nLoss'])
+        elif df.loc[i, 'close'] < prev_xStop and df.loc[i - 1, 'close'] < prev_xStop:
+            df.loc[i, 'xStop'] = min(prev_xStop, df.loc[i, 'close'] + df.loc[i, 'nLoss'])
+        elif df.loc[i, 'close'] > prev_xStop:
+            df.loc[i, 'xStop'] = df.loc[i, 'close'] - df.loc[i, 'nLoss']
+        else:
+            df.loc[i, 'xStop'] = df.loc[i, 'close'] + df.loc[i, 'nLoss']
+
+        prev_pos = df.loc[i - 1, 'pos']
+        if df.loc[i - 1, 'close'] > prev_xStop and df.loc[i, 'close'] < prev_xStop:
+            df.loc[i, 'pos'] = -1
+        elif df.loc[i - 1, 'close'] < prev_xStop and df.loc[i, 'close'] > prev_xStop:
+            df.loc[i, 'pos'] = 1
+        else:
+            df.loc[i, 'pos'] = prev_pos
+
+    successful_count = 0
+    failed_count = 0
+
+    prev_date_idx = df[df['date'] < performance_start_date].index.max()
+    if pd.notna(prev_date_idx):
+        prev_pos = df.loc[prev_date_idx, 'pos']
+        if prev_pos == 1:
+            start_idx = df[df['date'] >= performance_start_date].index.min()
+            entry_price = df.loc[start_idx, 'open']
+            entry_date = df.loc[start_idx, 'date']
+            remaining_lot = 1.0
+            partial_targets_hit = set()
+        else:
+            entry_price = None
+            entry_date = None
+            remaining_lot = 0
+            partial_targets_hit = set()
+    else:
+        entry_price = None
+        entry_date = None
+        remaining_lot = 0
+        partial_targets_hit = set()
+
+    start_idx = df[df['date'] >= performance_start_date].index.min()
+    for i in range(start_idx, len(df) - 1):
+        if df.loc[i, 'pos'] == 1 and df.loc[i - 1, 'pos'] != 1:
+            entry_price = df.loc[i + 1, 'open']
+            entry_date = df.loc[i + 1, 'date']
+            remaining_lot = 1.0
+            partial_targets_hit.clear()
+
+        elif df.loc[i, 'pos'] == -1 and df.loc[i - 1, 'pos'] != -1 and entry_price is not None:
+            exit_price = df.loc[i + 1, 'open']
+            exit_date = df.loc[i + 1, 'date']
+
+            if entry_date >= performance_start_date:
+                profit_pct = ((exit_price - entry_price) / entry_price) * 100
+                if profit_pct > 0:
+                    successful_count += 1
+                else:
+                    failed_count += 1
+
+            entry_price = None
+            remaining_lot = 0
+            partial_targets_hit.clear()
+
+        elif entry_price is not None and remaining_lot > 0:
+            current_price = df.loc[i, 'high']
+            for pct, lot_frac in partial_targets:
+                if pct not in partial_targets_hit:
+                    target_price = entry_price * (1 + pct / 100)
+                    if current_price >= target_price:
+                        partial_targets_hit.add(pct)
+                        remaining_lot -= lot_frac
+                        if remaining_lot < 0:
+                            remaining_lot = 0
+                        successful_count += 1
+                        break
+
+    total_trades = successful_count + failed_count
+    profitability_pct = (successful_count / total_trades * 100) if total_trades > 0 else 0
+
+    last_pos = df['pos'].dropna().iloc[-1]
+    signal = "AL" if last_pos == 1 else "SAT" if last_pos == -1 else "TUT"
+    signal_index = df[df['pos'] == last_pos].index[-1]
+
+    for i in reversed(range(signal_index)):
+        if df.loc[i, 'pos'] != last_pos:
+            signal_date = df.loc[i + 1, 'date']
+            bars_since = int(len(df) - (i + 1)) - 1
+            break
+    else:
+        signal_date = df.loc[0, 'date']
+        bars_since = int(len(df)) - 1
+
+    hisse_adi = os.path.basename(file_path).replace("_daily_data.xlsx", "").replace(".xlsx", "")
+
+    # --- Pearson ve EMA hesaplamaları
+    periods = [55, 89, 144, 233]
+    pearson_values = calculate_pearson(df, periods)
+    df['EMA8'] = calculate_ema(df['close'], 8)
+    df['EMA13'] = calculate_ema(df['close'], 13)
+    df['EMA21'] = calculate_ema(df['close'], 21)
+    df['EMA34'] = calculate_ema(df['close'], 34)
+    df['EMA55'] = calculate_ema(df['close'], 55)
+    df['EMA89'] = calculate_ema(df['close'], 89)
+    df['EMA144'] = calculate_ema(df['close'], 144)
+    df['EMA233'] = calculate_ema(df['close'], 233)
+    all_above, ideal_up = check_ema_up(df)
+
+    return {
+        "Hisse": hisse_adi,
+        "Tarih": signal_date,
+        "Sinyal": signal,
+        "Geçen Mum": bars_since,
+        "Toplam İşlem Sayısı": total_trades,
+        "Başarılı İşlem Sayısı": successful_count,
+        "Başarısız İşlem Sayısı": failed_count,
+        "Kar %": round(profitability_pct, 2),
+        **pearson_values,  # Pearson değerlerini ekle
+        "EMA UP": all_above,
+        "IDEAL UP": ideal_up
+    }
+
+def export_results(results_df, output_path):
+    results_df['Tarih'] = pd.to_datetime(results_df['Tarih'])
+    results_df = results_df.sort_values(by='Tarih', ascending=False)
+    results_df['Tarih'] = results_df['Tarih'].dt.strftime('%d.%m.%Y')
+
+    results_df.to_excel(output_path, index=False)
+    wb = load_workbook(output_path)
+    ws = wb.active
+
+    ws.auto_filter.ref = ws.dimensions
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+
+    ws.column_dimensions['A'].width = 15
+    for col in ws.iter_cols(min_col=2, max_col=ws.max_column):
+        col_letter = get_column_letter(col[0].column)
+        ws.column_dimensions[col_letter].width = 17
+
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row, max_col=ws.max_column):
+        sinyal = row[2].value
+        bars_since = int(row[3].value)
+        for cell in row:
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+        if bars_since == 0:
+            fill_color = "C6EFCE" if sinyal == "AL" else "FFC7CE" if sinyal == "SAT" else None
+            if fill_color:
+                fill = PatternFill(start_color=fill_color, end_color=fill_color, fill_type="solid")
+                for cell in row:
+                    cell.fill = fill
+
+    wb.save(output_path)
+    print("✅ Excel başarıyla kaydedildi:", output_path)
+
+def main():
+    with ProcessPoolExecutor() as executor:
+        results = list(tqdm(executor.map(process_file, excel_files), total=len(excel_files), desc="Dosyalar işleniyor"))
+
+    df_results = pd.DataFrame(results)
+    df_results["Geçen Mum"] = df_results["Geçen Mum"].astype(int)
+
+    final_df = df_results[(df_results["Geçen Mum"] == 0) & (df_results["Sinyal"].isin(["AL", "SAT"]))].copy()
+
+    output_dir = "/content/output"
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, "MIRACULUM1D.xlsx")
+    export_results(final_df, output_path)
+
+if __name__ == '__main__':
+    main()
+
+
+import os
+import pandas as pd
+import numpy as np
+from openpyxl import load_workbook
+from openpyxl.styles import PatternFill, Alignment, Font
+from openpyxl.utils import get_column_letter
+from concurrent.futures import ProcessPoolExecutor
+from tqdm import tqdm
+from sklearn.linear_model import LinearRegression
+
+performance_start_date = pd.Timestamp("2019-01-01")
+
+partial_targets = [
+    (15, 0.10),
+    (25, 0.15),
+    (34, 0.34),
+    (60, 0.31),
+]
+
+def calculate_ema(series, period):
+    """Calculate Exponential Moving Average (EMA)."""
+    return series.ewm(span=period, adjust=False).mean()
+
+def calculate_tema(series, period):
+    ema1 = calculate_ema(series, period)
+    ema2 = calculate_ema(ema1, period)
+    ema3 = calculate_ema(ema2, period)
+    return 3 * ema1 - 3 * ema2 + ema3
+
+def calculate_pearson(df, periods):
+    """Calculate Pearson correlation coefficient for the given periods."""
+    pearson_values = {}
+    for period in periods:
+        if len(df) >= period:
+            y = df['close'].tail(period)
+            X = np.array(range(period)).reshape(-1, 1)  # Zaman dizisi
+            model = LinearRegression().fit(X, y)
+            pearson_coefficient = np.corrcoef(X.T[0], y)[0, 1]
+            pearson_values[f'Pearson {period} Gün'] = pearson_coefficient
+        else:
+            pearson_values[f'Pearson {period} Gün'] = None  # Yetersiz veri olduğunda None ekle
+    return pearson_values
+
+def check_ema_up(df):
+    """Check for EMA 'UP' and 'IDEAL UP' conditions."""
+    last_row = df.iloc[-1]
+    closing_price = last_row['close']
+    
+    # "UP" durumu kontrolü
+    all_above = all(closing_price > last_row[ema] for ema in [
+        'EMA8', 'EMA13', 'EMA21', 'EMA34', 'EMA55', 'EMA89', 'EMA144', 'EMA233'
+    ])
+    
+    # "IDEAL UP" durumu kontrolü
+    ideal_up = (closing_price > last_row['EMA8'] and
+                last_row['EMA8'] > last_row['EMA13'] and
+                last_row['EMA13'] > last_row['EMA21'] and
+                last_row['EMA21'] > last_row['EMA34'] and
+                last_row['EMA34'] > last_row['EMA55'] and
+                last_row['EMA55'] > last_row['EMA89'] and
+                last_row['EMA89'] > last_row['EMA144'] and
+                last_row['EMA144'] > last_row['EMA233'])
+    
+    return all_above, ideal_up
+
+def process_file(file_path):
+    df = pd.read_excel(file_path)
+    df['datetime'] = pd.to_datetime(df['datetime'])
+    df = df.sort_values('datetime').reset_index(drop=True)
+
+    # Hesaplamalar (TEMA)
+    df['TEMA34'] = calculate_tema(df['close'], 34)
+    df['TEMA68'] = calculate_tema(df['close'], 68)
+
+    # EMA hesaplamaları
+    df['EMA8'] = calculate_ema(df['close'], 8)
+    df['EMA13'] = calculate_ema(df['close'], 13)
+    df['EMA21'] = calculate_ema(df['close'], 21)
+    df['EMA34'] = calculate_ema(df['close'], 34)
+    df['EMA55'] = calculate_ema(df['close'], 55)
+    df['EMA89'] = calculate_ema(df['close'], 89)
+    df['EMA144'] = calculate_ema(df['close'], 144)
+    df['EMA233'] = calculate_ema(df['close'], 233)
+
+    # PEARSON hesaplamaları
+    periods = [55, 89, 144, 233]
+    pearson_values = calculate_pearson(df, periods)
+
+    # EMA UP ve IDEAL UP kontrolü
+    all_above, ideal_up = check_ema_up(df)
+
+    # Sinyal üretimi
+    df['pos'] = np.nan
+    for i in range(1, len(df)):
+        prev_tema34 = df.loc[i - 1, 'TEMA34']
+        prev_tema68 = df.loc[i - 1, 'TEMA68']
+        curr_tema34 = df.loc[i, 'TEMA34']
+        curr_tema68 = df.loc[i, 'TEMA68']
+
+        if pd.notna(prev_tema34) and pd.notna(prev_tema68) and pd.notna(curr_tema34) and pd.notna(curr_tema68):
+            if prev_tema34 <= prev_tema68 and curr_tema34 > curr_tema68:
+                df.loc[i, 'pos'] = 1  # AL sinyali
+            elif prev_tema34 >= prev_tema68 and curr_tema34 < curr_tema68:
+                df.loc[i, 'pos'] = -1  # SAT sinyali
+            else:
+                df.loc[i, 'pos'] = df.loc[i - 1, 'pos']
+        else:
+            df.loc[i, 'pos'] = df.loc[i - 1, 'pos'] if i > 0 else np.nan
+
+    successful_count = 0
+    failed_count = 0
+
+    entry_price = None
+    entry_date = None
+    remaining_lot = 0
+    partial_targets_hit = set()
+
+    start_idx = df[df['datetime'] >= performance_start_date].index.min()
+    if start_idx is None:
+        start_idx = 0
+
+    for i in range(start_idx, len(df) - 1):
+        if df.loc[i, 'pos'] == 1 and df.loc[i - 1, 'pos'] != 1:
+            entry_price = df.loc[i + 1, 'open']
+            entry_date = df.loc[i + 1, 'datetime']
+            remaining_lot = 1.0
+            partial_targets_hit.clear()
+
+        elif df.loc[i, 'pos'] == -1 and df.loc[i - 1, 'pos'] != -1 and entry_price is not None:
+            exit_price = df.loc[i + 1, 'open']
+            exit_date = df.loc[i + 1, 'datetime']
+
+            if entry_date >= performance_start_date:
+                profit_pct = ((exit_price - entry_price) / entry_price) * 100
+                if profit_pct > 0:
+                    successful_count += 1
+                else:
+                    failed_count += 1
+
+            entry_price = None
+            remaining_lot = 0
+            partial_targets_hit.clear()
+
+        elif entry_price is not None and remaining_lot > 0:
+            current_price = df.loc[i, 'high']
+            for pct, lot_frac in partial_targets:
+                if pct not in partial_targets_hit:
+                    target_price = entry_price * (1 + pct / 100)
+                    if current_price >= target_price:
+                        partial_targets_hit.add(pct)
+                        remaining_lot -= lot_frac
+                        if remaining_lot < 0:
+                            remaining_lot = 0
+                        successful_count += 1
+                        break
+
+    total_trades = successful_count + failed_count
+    profitability_pct = (successful_count / total_trades * 100) if total_trades > 0 else 0
+
+    last_pos = df['pos'].dropna().iloc[-1]
+    signal = "AL" if last_pos == 1 else "SAT" if last_pos == -1 else "TUT"
+    signal_index = df[df['pos'] == last_pos].index[-1]
+
+    for i in reversed(range(signal_index)):
+        if df.loc[i, 'pos'] != last_pos:
+            signal_date = df.loc[i + 1, 'datetime']
+            bars_since = int(len(df) - (i + 1)) - 1
+            break
+    else:
+        signal_date = df.loc[0, 'datetime']
+        bars_since = int(len(df)) - 1
+
+    hisse_adi = os.path.basename(file_path).replace("_daily_data.xlsx", "").replace(".xlsx", "")
+
+    return {
+        "Hisse": hisse_adi,
+        "Tarih": signal_date,
+        "Sinyal": signal,
+        "Geçen Mum": bars_since,
+        "Toplam İşlem Sayısı": total_trades,
+        "Başarılı İşlem Sayısı": successful_count,
+        "Başarısız İşlem Sayısı": failed_count,
+        "Kar %": round(profitability_pct, 2),
+        **pearson_values,  # Pearson değerlerini ekle
+        "EMA UP": all_above,
+        "IDEAL UP": ideal_up
+    }
+
+def export_results(results_df, output_path):
+    results_df['Tarih'] = pd.to_datetime(results_df['Tarih'])
+    results_df = results_df.sort_values(by='Tarih', ascending=False)
+    results_df['Tarih'] = results_df['Tarih'].dt.strftime('%d.%m.%Y')
+
+    results_df.to_excel(output_path, index=False)
+    wb = load_workbook(output_path)
+    ws = wb.active
+
+    ws.auto_filter.ref = ws.dimensions
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+
+    ws.column_dimensions['A'].width = 15
+    for col in ws.iter_cols(min_col=2, max_col=ws.max_column):
+        col_letter = get_column_letter(col[0].column)
+        ws.column_dimensions[col_letter].width = 17
+
+    green_fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
+    red_fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')
+    center_alignment = Alignment(horizontal='center', vertical='center')
+
+    # I, J, K, L sütunları için sayısal format ve virgülden sonra 2 basamak
+    for col in ['I', 'J', 'K', 'L']:
+        for row in ws[col]:
+            try:
+                row.value = round(float(row.value), 2)  # Sayısal değeri float'a çevir ve 2 basamağa yuvarla
+            except ValueError:
+                pass  # Hata alırsak geçeriz
+
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row, max_col=ws.max_column):
+        sinyal = row[2].value
+        bars_since = int(row[3].value)
+        for cell in row:
+            cell.alignment = center_alignment
+        if bars_since == 0:
+            fill_color = green_fill if sinyal == "AL" else red_fill if sinyal == "SAT" else None
+            if fill_color:
+                for cell in row:
+                    cell.fill = fill_color
+
+    wb.save(output_path)
+    print("✅ Excel başarıyla kaydedildi:", output_path)
+
+def main():
+    folder_path = "/content/data"
+    excel_files = [os.path.join(folder_path, f) for f in os.listdir(folder_path) if f.endswith(".xlsx")]
+
+    with ProcessPoolExecutor() as executor:
+        results = list(tqdm(executor.map(process_file, excel_files), total=len(excel_files), desc="Dosyalar işleniyor"))
+
+    df_results = pd.DataFrame(results)
+    df_results["Geçen Mum"] = df_results["Geçen Mum"].astype(int)
+
+    final_df = df_results[(df_results["Geçen Mum"] == 0) & (df_results["Sinyal"].isin(["AL", "SAT"]))].copy()
+
+    output_dir = "/content/output"
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, "BUM.xlsx")
+    export_results(final_df, output_path)
+
+if __name__ == '__main__':
+    main()
+
+
+import os
+import pandas as pd
+import numpy as np
+import math
+from tqdm import tqdm
+from multiprocessing import Pool, cpu_count, freeze_support
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
+from openpyxl import load_workbook
+from sklearn.linear_model import LinearRegression
+
+performance_start_date = pd.Timestamp("2019-01-01")
+
+partial_targets = [
+    (12, 0.10),
+    (20, 0.15),
+    (34, 0.34),
+    (55, 0.31),
+]
+
+# EMA hesaplama fonksiyonu
+def calculate_ema(series, period):
+    """Calculate Exponential Moving Average."""
+    return series.ewm(span=period, adjust=False).mean()
+
+# Pearson korelasyonu hesaplama fonksiyonu
+def calculate_pearson(df, periods): 
+    """Calculate Pearson correlation coefficient for the given periods."""
+    pearson_values = {}
+    for period in periods:
+        if len(df) >= period:
+            y = df['close'].tail(period)
+            X = np.array(range(period)).reshape(-1, 1)  # Zaman dizisi
+            model = LinearRegression().fit(X, y)
+            pearson_coefficient = np.corrcoef(X.T[0], y)[0, 1]
+            pearson_values[f'Pearson {period} Gün'] = round(pearson_coefficient, 2)  # Yuvarla
+        else:
+            pearson_values[f'Pearson {period} Gün'] = None  # Yetersiz veri olduğunda None ekle
+    return pearson_values
+
+def calculate_wma_numpy(data, period):
+    weights = np.arange(1, period + 1)
+    result = np.full_like(data, fill_value=np.nan, dtype=np.float64)
+    for i in range(period - 1, len(data)):
+        result[i] = np.dot(data[i - period + 1:i + 1], weights) / weights.sum()
+    return result
+
+def calculate_abc(data):
+    close = data['close'].to_numpy()
+    wma1 = calculate_wma_numpy(close, 34)
+    wma2 = calculate_wma_numpy(close, 68)
+    series = 2 * wma1 - wma2
+    sqrt_period = int(round(math.sqrt(68)))
+    abc_values = calculate_wma_numpy(series, sqrt_period)
+    data['abc'] = abc_values
+    return data
+
+def detect_signals(df):
+    df['abc_2'] = df['abc'].shift(2)
+    df['Sinyal'] = np.where(
+        (df['abc'] > df['abc_2']) & (df['abc'].shift(1) <= df['abc_2'].shift(1)), 'AL',
+        np.where(
+            (df['abc'] < df['abc_2']) & (df['abc'].shift(1) >= df['abc_2'].shift(1)), 'SAT',
+            None
+        )
+    )
+
+    last_signal = None
+    last_signal_datetime = None
+    last_signal_index = None
+
+    for i in range(len(df)):
+        if pd.notna(df.loc[i, 'Sinyal']):
+            last_signal = df.loc[i, 'Sinyal']
+            last_signal_datetime = df.loc[i, 'datetime'].date()
+            last_signal_index = i
+        df.loc[i, 'Sinyal'] = last_signal
+        df.loc[i, 'Tarih'] = last_signal_datetime
+        df.loc[i, 'Kaç Mum'] = i - last_signal_index if last_signal_index is not None else None
+
+    return df
+
+def check_ema_up(df):
+    """Check for EMA 'UP' and 'IDEAL UP' conditions."""
+    last_row = df.iloc[-1]
+    closing_price = last_row['close']
+    
+    # "UP" durumu kontrolü
+    all_above = all(closing_price > last_row[ema] for ema in [
+        'EMA8', 'EMA13', 'EMA21', 'EMA34', 'EMA55', 'EMA89', 'EMA144', 'EMA233'
+    ])
+    
+    # "IDEAL UP" durumu kontrolü
+    ideal_up = (closing_price > last_row['EMA8'] and
+                last_row['EMA8'] > last_row['EMA13'] and
+                last_row['EMA13'] > last_row['EMA21'] and
+                last_row['EMA21'] > last_row['EMA34'] and
+                last_row['EMA34'] > last_row['EMA55'] and
+                last_row['EMA55'] > last_row['EMA89'] and
+                last_row['EMA89'] > last_row['EMA144'] and
+                last_row['EMA144'] > last_row['EMA233'])
+    
+    return all_above, ideal_up
+
+def process_single_stock(file_path):
+    base, filename = os.path.split(file_path)
+    hisse_adi = filename.replace('_daily_data', '').replace('.xlsx', '')
+
+    df = pd.read_excel(file_path)
+    df['datetime'] = pd.to_datetime(df['datetime'])
+    df = calculate_abc(df)
+    df = detect_signals(df)
+
+    # --- Pearson ve EMA hesaplamaları
+    periods = [55, 89, 144, 233]
+    pearson_values = calculate_pearson(df, periods)
+    df['EMA8'] = calculate_ema(df['close'], 8)
+    df['EMA13'] = calculate_ema(df['close'], 13)
+    df['EMA21'] = calculate_ema(df['close'], 21)
+    df['EMA34'] = calculate_ema(df['close'], 34)
+    df['EMA55'] = calculate_ema(df['close'], 55)
+    df['EMA89'] = calculate_ema(df['close'], 89)
+    df['EMA144'] = calculate_ema(df['close'], 144)
+    df['EMA233'] = calculate_ema(df['close'], 233)
+
+    # --- EMA UP ve IDEAL UP hesaplama
+    all_above, ideal_up = check_ema_up(df)
+
+    successful_count = 0
+    failed_count = 0
+    entry_price = None
+    remaining_lot = 0
+    partial_targets_hit = set()
+
+    for i in range(len(df) - 1):
+        if df.loc[i, 'Sinyal'] == 'AL' and (i == 0 or df.loc[i - 1, 'Sinyal'] != 'AL'):
+            entry_price = df.loc[i + 1, 'close']
+            remaining_lot = 1.0
+            partial_targets_hit.clear()
+
+        elif df.loc[i, 'Sinyal'] == 'SAT' and (i == 0 or df.loc[i - 1, 'Sinyal'] != 'SAT') and entry_price is not None:
+            exit_price = df.loc[i + 1, 'close']
+
+            profit_pct = ((exit_price - entry_price) / entry_price) * 100
+            if profit_pct > 0:
+                successful_count += 1
+            else:
+                failed_count += 1
+
+            entry_price = None
+            remaining_lot = 0
+            partial_targets_hit.clear()
+
+        elif entry_price is not None and remaining_lot > 0:
+            current_price = df.loc[i, 'high']
+            for pct, lot_frac in partial_targets:
+                if pct not in partial_targets_hit:
+                    target_price = entry_price * (1 + pct / 100)
+                    if current_price >= target_price:
+                        partial_targets_hit.add(pct)
+                        remaining_lot -= lot_frac
+                        if remaining_lot < 0:
+                            remaining_lot = 0
+                        successful_count += 1
+                        break
+
+    total_trades = successful_count + failed_count
+    profitability_pct = (successful_count / total_trades * 100) if total_trades > 0 else 0
+
+    if not df.empty:
+        last_row = df.iloc[-1]
+        return {
+            'HİSSE': hisse_adi,
+            'Sinyal': last_row['Sinyal'],
+            'Tarih': last_row['Tarih'],
+            'Kaç Mum': last_row['Kaç Mum'],
+            'Başarılı İşlem Sayısı': successful_count,
+            'Başarısız İşlem Sayısı': failed_count,
+            'Toplam İşlem Sayısı': total_trades,
+            'Kar %': round(profitability_pct, 2),
+            **pearson_values,  # Pearson değerlerini ekle
+            'EMA UP': all_above,
+            'IDEAL UP': ideal_up
+        }
+    return None
+
+def export_results(results_df, output_file):
+    results_df['Tarih'] = pd.to_datetime(results_df['Tarih'])
+    results_df = results_df.sort_values(by='Tarih', ascending=False)
+    results_df['Tarih'] = results_df['Tarih'].dt.strftime('%d.%m.%Y')
+
+    results_df.to_excel(output_file, index=False)
+    wb = load_workbook(output_file)
+    ws = wb.active
+
+    ws.auto_filter.ref = ws.dimensions
+    header_font = Font(bold=True)
+    for cell in ws[1]:
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+
+    for col_num in range(1, len(results_df.columns) + 1):
+        col_letter = get_column_letter(col_num)
+        ws.column_dimensions[col_letter].width = 13
+        for row in range(1, ws.max_row + 1):
+            cell = ws.cell(row=row, column=col_num)
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+
+    green_fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
+    red_fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')
+
+    for row_idx, (signal, days) in enumerate(zip(results_df['Sinyal'], results_df['Kaç Mum']), start=2):
+        if days == 0:
+            if signal == 'AL':
+                for col_idx in range(1, len(results_df.columns) + 1):
+                    ws.cell(row=row_idx, column=col_idx).fill = green_fill
+            elif signal == 'SAT':
+                for col_idx in range(1, len(results_df.columns) + 1):
+                    ws.cell(row=row_idx, column=col_idx).fill = red_fill
+
+    wb.save(output_file)
+    print(f"✅ İşlem tamamlandı. Dosya: {output_file}")
+
+def process_stocks(data_folder):
+    all_files = [os.path.join(data_folder, f) for f in os.listdir(data_folder) if f.endswith('.xlsx')]
+
+    cpu_cores = max(cpu_count() - 1, 1)
+    print(f"Paralel işlem için {cpu_cores} çekirdek kullanılıyor...")
+
+    with Pool(cpu_cores) as pool:
+        results = list(tqdm(pool.imap_unordered(process_single_stock, all_files), total=len(all_files), desc="Dosyalar işleniyor"))
+
+    results = [r for r in results if r is not None]
+    if not results:
+        print("Hiç sinyal bulunamadı.")
+        return
+
+    results_df = pd.DataFrame(results)
+    # Sadece son gün AL veya SAT sinyali verenler
+    results_df = results_df[(results_df['Kaç Mum'] == 0) & (results_df['Sinyal'].isin(['AL', 'SAT']))].copy()
+    results_df.sort_values(by='HİSSE', inplace=True)
+
+    output_file = "/content/output/HSD TARAMA.xlsx"
+    export_results(results_df, output_file)
+
+if __name__ == '__main__':
+    freeze_support()
+    data_folder = "/content/data"
+    process_stocks(data_folder)
+
+
+import pandas as pd
+import numpy as np
+import os
+from openpyxl import load_workbook
+from openpyxl.styles import PatternFill, Alignment, Font
+from openpyxl.utils import get_column_letter
+from concurrent.futures import ProcessPoolExecutor
+from tqdm import tqdm
+from sklearn.linear_model import LinearRegression
+
+folder_path = "/content/data"
+excel_files = [os.path.join(folder_path, f) for f in os.listdir(folder_path) if f.endswith(".xlsx")]
+
+performance_start_date = pd.Timestamp("2019-01-01")
+
+partial_targets = [
+    (13, 0.05),
+    (34, 0.08),
+    (49, 0.13),
+    (68, 0.21),
+]
+
+# EMA hesaplama fonksiyonu
+def calculate_ema(series, period):
+    """Calculate Exponential Moving Average."""
+    return series.ewm(span=period, adjust=False).mean()
+
+# Pearson korelasyonu hesaplama fonksiyonu
+def calculate_pearson(df, periods): 
+    """Calculate Pearson correlation coefficient for the given periods."""
+    pearson_values = {}
+    for period in periods:
+        if len(df) >= period:
+            y = df['close'].tail(period)
+            X = np.array(range(period)).reshape(-1, 1)  # Zaman dizisi
+            model = LinearRegression().fit(X, y)
+            pearson_coefficient = np.corrcoef(X.T[0], y)[0, 1]
+            pearson_values[f'Pearson {period} Gün'] = round(pearson_coefficient, 2)  # Yuvarla
+        else:
+            pearson_values[f'Pearson {period} Gün'] = None  # Yetersiz veri olduğunda None ekle
+    return pearson_values
+
+def check_ema_up(df):
+    """Check for EMA 'UP' and 'IDEAL UP' conditions."""
+    last_row = df.iloc[-1]
+    closing_price = last_row['close']
+    
+    # "UP" durumu kontrolü
+    all_above = all(closing_price > last_row[ema] for ema in [
+        'EMA8', 'EMA13', 'EMA21', 'EMA34', 'EMA55', 'EMA89', 'EMA144', 'EMA233'
+    ])
+    
+    # "IDEAL UP" durumu kontrolü
+    ideal_up = (closing_price > last_row['EMA8'] and
+                last_row['EMA8'] > last_row['EMA13'] and
+                last_row['EMA13'] > last_row['EMA21'] and
+                last_row['EMA21'] > last_row['EMA34'] and
+                last_row['EMA34'] > last_row['EMA55'] and
+                last_row['EMA55'] > last_row['EMA89'] and
+                last_row['EMA89'] > last_row['EMA144'] and
+                last_row['EMA144'] > last_row['EMA233'])
+    
+    return all_above, ideal_up
+
+def process_file(file_path):
+    df = pd.read_excel(file_path)
+    df['datetime'] = pd.to_datetime(df['datetime'])
+    df = df.sort_values('datetime').reset_index(drop=True)
+
+    # hl2 hesaplaması, high ve low ortalaması
+    df['hl2'] = (df['high'] + df['low']) / 2
+
+    close = df['close']
+    high = df['high']
+    low = df['low']
+    
+    # İkinci koddaki teknik göstergeler
+    outr = df['hl2'].ewm(span=8, adjust=False).mean()  # EMA
+    fast_mar = df['hl2'].ewm(span=55, adjust=False).mean()
+    slow_mar = df['hl2'].ewm(span=68, adjust=False).mean()
+    macdr = fast_mar - slow_mar
+    signalr = macdr.rolling(window=6).mean()
+    histr = macdr - signalr
+    vrsi = df['close'].diff().where(df['close'].diff() > 0, 0).rolling(window=14).mean() / df['close'].diff().where(df['close'].diff() < 0, 0).rolling(window=14).mean()
+    oncu1r = df['close'].ewm(span=5).mean()
+    oncu2r = df['close'].rolling(window=5).mean()
+
+    # AL ve SAT sinyalleri
+    AL = (close > outr) & \
+         (close > close.shift(1)) & \
+         (outr > outr.shift(1)) & \
+         (histr > 0) & (histr.shift(1) < 0) & \
+         (vrsi < 100) & (oncu2r < oncu1r)
+
+    SAT = (close < outr) & \
+          (close < close.shift(1)) & \
+          (outr < outr.shift(1)) & \
+          (histr < 0) & (histr.shift(1) > 0) & \
+          (vrsi > 35)
+
+    # Sinyalleri belirle
+    df['pos'] = np.nan
+    df.loc[AL, 'pos'] = 1
+    df.loc[SAT, 'pos'] = -1
+
+    successful_count = 0
+    failed_count = 0
+    entry_price = None
+    entry_date = None
+    remaining_lot = 0
+    partial_targets_hit = set()
+
+    start_idx = df[df['datetime'] >= performance_start_date].index.min()
+    if start_idx is None:
+        start_idx = 0
+
+    for i in range(start_idx, len(df) - 1):
+        if df.loc[i, 'pos'] == 1 and (i == 0 or df.loc[i - 1, 'pos'] != 1):
+            entry_price = df.loc[i + 1, 'open']
+            entry_date = df.loc[i + 1, 'datetime']
+            remaining_lot = 1.0
+            partial_targets_hit.clear()
+
+        elif df.loc[i, 'pos'] == -1 and (i == 0 or df.loc[i - 1, 'pos'] != -1) and entry_price is not None:
+            exit_price = df.loc[i + 1, 'open']
+            exit_date = df.loc[i + 1, 'datetime']
+
+            if entry_date >= performance_start_date:
+                profit_pct = ((exit_price - entry_price) / entry_price) * 100
+                if profit_pct > 0:
+                    successful_count += 1
+                else:
+                    failed_count += 1
+
+            entry_price = None
+            remaining_lot = 0
+            partial_targets_hit.clear()
+
+        elif entry_price is not None and remaining_lot > 0:
+            current_price = df.loc[i, 'high']
+            for pct, lot_frac in partial_targets:
+                if pct not in partial_targets_hit:
+                    target_price = entry_price * (1 + pct / 100)
+                    if current_price >= target_price:
+                        partial_targets_hit.add(pct)
+                        remaining_lot -= lot_frac
+                        if remaining_lot < 0:
+                            remaining_lot = 0
+                        successful_count += 1
+                        break
+
+    total_trades = successful_count + failed_count
+    profitability_pct = (successful_count / total_trades * 100) if total_trades > 0 else 0
+
+    last_pos = df['pos'].dropna().iloc[-1] if not df['pos'].dropna().empty else np.nan
+    signal = "AL" if last_pos == 1 else "SAT" if last_pos == -1 else "TUT"
+    signal_index = df[df['pos'] == last_pos].index[-1] if not df[df['pos'] == last_pos].empty else 0
+
+    for i in reversed(range(signal_index)):
+        if df.loc[i, 'pos'] != last_pos:
+            signal_date = df.loc[i + 1, 'datetime']
+            bars_since = len(df) - (i + 1) - 1
+            break
+    else:
+        signal_date = df.loc[0, 'datetime']
+        bars_since = len(df) - 1
+
+    hisse_adi = os.path.basename(file_path).replace('_daily_data.xlsx', '').replace('.xlsx', '')
+
+    # --- Pearson ve EMA hesaplamaları
+    periods = [55, 89, 144, 233]
+    pearson_values = calculate_pearson(df, periods)
+    df['EMA8'] = calculate_ema(df['close'], 8)
+    df['EMA13'] = calculate_ema(df['close'], 13)
+    df['EMA21'] = calculate_ema(df['close'], 21)
+    df['EMA34'] = calculate_ema(df['close'], 34)
+    df['EMA55'] = calculate_ema(df['close'], 55)
+    df['EMA89'] = calculate_ema(df['close'], 89)
+    df['EMA144'] = calculate_ema(df['close'], 144)
+    df['EMA233'] = calculate_ema(df['close'], 233)
+
+    # --- EMA UP ve IDEAL UP hesaplama
+    all_above, ideal_up = check_ema_up(df)
+
+    return {
+        "Hisse": hisse_adi,
+        "Tarih": signal_date,
+        "Sinyal": signal,
+        "Geçen Mum": bars_since,
+        "Toplam İşlem Sayısı": total_trades,
+        "Başarılı İşlem Sayısı": successful_count,
+        "Başarısız İşlem Sayısı": failed_count,
+        "Kar %": round(profitability_pct, 2),
+        **pearson_values,  # Pearson değerlerini ekle
+        "EMA UP": all_above,
+        "IDEAL UP": ideal_up
+    }
+
+def export_results(results_df, output_path):
+    results_df['Tarih'] = pd.to_datetime(results_df['Tarih'])
+    results_df = results_df.sort_values(by='Tarih', ascending=False)
+    results_df['Tarih'] = results_df['Tarih'].dt.strftime('%d.%m.%Y')
+
+    results_df.to_excel(output_path, index=False)
+    wb = load_workbook(output_path)
+    ws = wb.active
+
+    ws.auto_filter.ref = ws.dimensions
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+
+    ws.column_dimensions['A'].width = 15
+    for col in ws.iter_cols(min_col=2, max_col=ws.max_column):
+        col_letter = get_column_letter(col[0].column)
+        ws.column_dimensions[col_letter].width = 17
+
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row, max_col=ws.max_column):
+        sinyal = row[2].value
+        bars_since = int(row[3].value)
+        for cell in row:
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+        if bars_since == 0:
+            fill_color = "C6EFCE" if sinyal == "AL" else "FFC7CE" if sinyal == "SAT" else None
+            if fill_color:
+                fill = PatternFill(start_color=fill_color, end_color=fill_color, fill_type="solid")
+                for cell in row:
+                    cell.fill = fill
+
+    wb.save(output_path)
+    print("✅ Excel başarıyla kaydedildi:", output_path)
+
+def main():
+    with ProcessPoolExecutor() as executor:
+        results = list(tqdm(executor.map(process_file, excel_files), total=len(excel_files), desc="Dosyalar işleniyor"))
+
+    filtered_results = [r for r in results if r is not None]
+    if not filtered_results:
+        print("Hiç sinyal bulunamadı.")
+        return
+
+    df_results = pd.DataFrame(filtered_results)
+    df_results["Geçen Mum"] = df_results["Geçen Mum"].astype(int)
+
+    # Hem Geçen Mum 0 olan hem Sinyal AL veya SAT olanları filtreliyoruz
+    final_df = df_results[(df_results["Geçen Mum"] == 0) & (df_results["Sinyal"].isin(["AL", "SAT"]))].copy()
+
+    if final_df.empty:
+        print("Son gün AL veya SAT sinyali veren hisse bulunamadı.")
+        return
+
+    output_dir = "/content/output"
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, "RUA.xlsx")
+    export_results(final_df, output_path)
+
+if __name__ == '__main__':
+    main()
+
+
+import pandas as pd
+import numpy as np
+import os
+from openpyxl import load_workbook
+from openpyxl.styles import PatternFill, Alignment, Font
+from openpyxl.utils import get_column_letter
+from concurrent.futures import ProcessPoolExecutor
+from tqdm import tqdm
+from sklearn.linear_model import LinearRegression
+
+folder_path = "/content/data"
+excel_files = [os.path.join(folder_path, f) for f in os.listdir(folder_path) if f.endswith(".xlsx")]
+
+performance_start_date = pd.Timestamp("2019-01-01")
+
+partial_targets = [
+    (13, 0.05),
+    (21, 0.08),
+    (29, 0.13),
+    (34, 0.21),
+]
+
+# EMA hesaplama fonksiyonu
+def calculate_ema(series, period):
+    """Calculate Exponential Moving Average."""
+    return series.ewm(span=period, adjust=False).mean()
+
+# Pearson korelasyonu hesaplama fonksiyonu
+def calculate_pearson(df, periods): 
+    """Calculate Pearson correlation coefficient for the given periods."""
+    pearson_values = {}
+    for period in periods:
+        if len(df) >= period:
+            y = df['close'].tail(period)
+            X = np.array(range(period)).reshape(-1, 1)  # Zaman dizisi
+            model = LinearRegression().fit(X, y)
+            pearson_coefficient = np.corrcoef(X.T[0], y)[0, 1]
+            pearson_values[f'Pearson {period} Gün'] = round(pearson_coefficient, 2)  # Yuvarla
+        else:
+            pearson_values[f'Pearson {period} Gün'] = None  # Yetersiz veri olduğunda None ekle
+    return pearson_values
+
+# HMA hesaplama fonksiyonu
+def calculate_wma(data, period):
+    weights = np.arange(1, period + 1)
+    return data.rolling(period).apply(lambda x: np.dot(x, weights) / weights.sum(), raw=True)
+
+def calculate_hma(data):
+    wma10 = calculate_wma(data, 10)
+    wma89 = calculate_wma(wma10, 89)
+    return wma89
+
+# ATR hesaplama fonksiyonu
+def calculate_atr_wilder(df, period=14):
+    df['High-Low'] = df['high'] - df['low']
+    df['High-Close'] = abs(df['high'] - df['close'].shift(1))
+    df['Low-Close'] = abs(df['low'] - df['close'].shift(1))
+    df['True Range'] = df[['High-Low', 'High-Close', 'Low-Close']].max(axis=1)
+
+    tr = df['True Range']
+    atr = tr.ewm(alpha=1/period, adjust=False).mean()
+    return atr
+
+# Filtreleme fonksiyonu
+def filter_signals(signals):
+    filtered = []
+    current = 0
+    for s in signals:
+        if s == current or s == 0:
+            filtered.append(0)
+        else:
+            current = s
+            filtered.append(s)
+    return filtered
+
+def check_ema_up(df):
+    """Check for EMA 'UP' and 'IDEAL UP' conditions."""
+    last_row = df.iloc[-1]
+    closing_price = last_row['close']
+    
+    # "UP" durumu kontrolü
+    all_above = all(closing_price > last_row[ema] for ema in [
+        'EMA8', 'EMA13', 'EMA21', 'EMA34', 'EMA55', 'EMA89', 'EMA144', 'EMA233'
+    ])
+    
+    # "IDEAL UP" durumu kontrolü
+    ideal_up = (closing_price > last_row['EMA8'] and
+                last_row['EMA8'] > last_row['EMA13'] and
+                last_row['EMA13'] > last_row['EMA21'] and
+                last_row['EMA21'] > last_row['EMA34'] and
+                last_row['EMA34'] > last_row['EMA55'] and
+                last_row['EMA55'] > last_row['EMA89'] and
+                last_row['EMA89'] > last_row['EMA144'] and
+                last_row['EMA144'] > last_row['EMA233'])
+    
+    return all_above, ideal_up
+
+def process_file(file_path):
+    df = pd.read_excel(file_path)
+    df['datetime'] = pd.to_datetime(df['datetime'])
+    df = df.sort_values('datetime').reset_index(drop=True)
+
+    # HMA'yı hesapla ve ekle
+    df['HMA'] = calculate_hma(df['close'])
+
+    # ATR'yi hesapla ve ekle
+    df['ATR'] = calculate_atr_wilder(df)
+
+    close = df['close']
+    length = 133
+    len_smma = 7
+    a = 4 / (length + 2)
+    ema_length = int(length / 2)
+    alpha = 2 / (ema_length + 1)
+
+    s = []
+    ema_now = close.iloc[:ema_length].mean()
+    prev_s = close.iloc[0]
+
+    for i in range(len(close)):
+        if i == 0:
+            s_now = close.iloc[0]
+        else:
+            ema_input = prev_s
+            ema_now = alpha * ema_input + (1 - alpha) * ema_now
+            s_now = (a * close.iloc[i]) + prev_s - (a * ema_now)
+        s.append(s_now)
+        prev_s = s_now
+
+    smma_list = []
+    prev_smma = None
+    for i in range(len(close)):
+        if i < len_smma - 1:
+            smma_list.append(None)
+        elif i == len_smma - 1:
+            sma = close.iloc[:len_smma].mean()
+            smma_list.append(sma)
+            prev_smma = sma
+        else:
+            smma_now = (prev_smma * (len_smma - 1) + close.iloc[i]) / len_smma
+            smma_list.append(smma_now)
+            prev_smma = smma_now
+
+    # Yeni alım ve satış şartlarını entegre edelim
+    df['Prev_Close'] = df['close'].shift(1)
+    df['Prev_ATR'] = df['ATR'].shift(1)
+    df['Is_Sideways'] = df['ATR'] < 0.5 * df['close'].rolling(window=20).std()
+
+    # Alım ve Satış sinyalleri
+    df['Buy_Signal'] = (df['close'] > df['HMA']) & (df['close'] > df['Prev_Close'] + df['Prev_ATR']) & (~df['Is_Sideways'])
+    df['Sell_Signal'] = (df['close'] < df['HMA']) & (df['close'] < df['Prev_Close'] - df['Prev_ATR']) & (~df['Is_Sideways'])
+    
+    df['Signal'] = np.where(df['Buy_Signal'], 1, np.where(df['Sell_Signal'], -1, 0))
+
+    df['Filtered_Signal'] = filter_signals(df['Signal'])
+    df['pos'] = df['Filtered_Signal']
+
+    successful_count = 0
+    failed_count = 0
+
+    entry_price = None
+    entry_date = None
+    remaining_lot = 0
+    partial_targets_hit = set()
+
+    start_idx = df[df['datetime'] >= performance_start_date].index.min()
+    if start_idx is None:
+        start_idx = 0
+
+    for i in range(start_idx, len(df) - 1):
+        if df.loc[i, 'pos'] == 1 and (i == 0 or df.loc[i - 1, 'pos'] != 1):
+            entry_price = df.loc[i + 1, 'open']
+            entry_date = df.loc[i + 1, 'datetime']
+            remaining_lot = 1.0
+            partial_targets_hit.clear()
+
+        elif df.loc[i, 'pos'] == -1 and (i == 0 or df.loc[i - 1, 'pos'] != -1) and entry_price is not None:
+            exit_price = df.loc[i + 1, 'open']
+            exit_date = df.loc[i + 1, 'datetime']
+
+            if entry_date >= performance_start_date:
+                profit_pct = ((exit_price - entry_price) / entry_price) * 100
+                if profit_pct > 0:
+                    successful_count += 1
+                else:
+                    failed_count += 1
+
+            entry_price = None
+            remaining_lot = 0
+            partial_targets_hit.clear()
+
+        elif entry_price is not None and remaining_lot > 0:
+            current_price = df.loc[i, 'high']
+            for pct, lot_frac in partial_targets:
+                if pct not in partial_targets_hit:
+                    target_price = entry_price * (1 + pct / 100)
+                    if current_price >= target_price:
+                        partial_targets_hit.add(pct)
+                        remaining_lot -= lot_frac
+                        if remaining_lot < 0:
+                            remaining_lot = 0
+                        successful_count += 1
+                        break
+
+    total_trades = successful_count + failed_count
+    profitability_pct = (successful_count / total_trades * 100) if total_trades > 0 else 0
+
+    last_pos = df['pos'].dropna().iloc[-1] if not df['pos'].dropna().empty else np.nan
+    signal = "AL" if last_pos == 1 else "SAT" if last_pos == -1 else "TUT"
+    signal_index = df[df['pos'] == last_pos].index[-1] if not df[df['pos'] == last_pos].empty else 0
+
+    for i in reversed(range(signal_index)):
+        if df.loc[i, 'pos'] != last_pos:
+            signal_date = df.loc[i + 1, 'datetime']
+            bars_since = len(df) - (i + 1) - 1
+            break
+    else:
+        signal_date = df.loc[0, 'datetime']
+        bars_since = len(df) - 1
+
+    hisse_adi = os.path.basename(file_path).replace('_daily_data.xlsx', '').replace('.xlsx', '')
+
+    # --- Pearson ve EMA hesaplamaları
+    periods = [55, 89, 144, 233]
+    pearson_values = calculate_pearson(df, periods)
+    df['EMA8'] = calculate_ema(df['close'], 8)
+    df['EMA13'] = calculate_ema(df['close'], 13)
+    df['EMA21'] = calculate_ema(df['close'], 21)
+    df['EMA34'] = calculate_ema(df['close'], 34)
+    df['EMA55'] = calculate_ema(df['close'], 55)
+    df['EMA89'] = calculate_ema(df['close'], 89)
+    df['EMA144'] = calculate_ema(df['close'], 144)
+    df['EMA233'] = calculate_ema(df['close'], 233)
+    all_above, ideal_up = check_ema_up(df)
+
+    return {
+        "Hisse": hisse_adi,
+        "Tarih": signal_date,
+        "Sinyal": signal,
+        "Geçen Mum": bars_since,
+        "Toplam İşlem Sayısı": total_trades,
+        "Başarılı İşlem Sayısı": successful_count,
+        "Başarısız İşlem Sayısı": failed_count,
+        "Kar %": round(profitability_pct, 2),
+        **pearson_values,  # Pearson değerlerini ekle
+        "EMA UP": all_above,
+        "IDEAL UP": ideal_up
+    }
+
+# Exporting results
+def export_results(results_df, output_path):
+    results_df['Tarih'] = pd.to_datetime(results_df['Tarih'])
+    results_df = results_df.sort_values(by='Tarih', ascending=False)
+    results_df['Tarih'] = results_df['Tarih'].dt.strftime('%d.%m.%Y')
+
+    results_df.to_excel(output_path, index=False)
+    wb = load_workbook(output_path)
+    ws = wb.active
+
+    ws.auto_filter.ref = ws.dimensions
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+
+    ws.column_dimensions['A'].width = 15
+    for col in ws.iter_cols(min_col=2, max_col=ws.max_column):
+        col_letter = get_column_letter(col[0].column)
+        ws.column_dimensions[col_letter].width = 17
+
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row, max_col=ws.max_column):
+        sinyal = row[2].value
+        bars_since = int(row[3].value)
+        for cell in row:
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+        if bars_since == 0:
+            fill_color = "C6EFCE" if sinyal == "AL" else "FFC7CE" if sinyal == "SAT" else None
+            if fill_color:
+                fill = PatternFill(start_color=fill_color, end_color=fill_color, fill_type="solid")
+                for cell in row:
+                    cell.fill = fill
+
+    wb.save(output_path)
+    print("✅ Excel başarıyla kaydedildi:", output_path)
+
+def main():
+    with ProcessPoolExecutor() as executor:
+        results = list(tqdm(executor.map(process_file, excel_files), total=len(excel_files), desc="Dosyalar işleniyor"))
+
+    filtered_results = [r for r in results if r is not None]
+    if not filtered_results:
+        print("Hiç sinyal bulunamadı.")
+        return
+
+    df_results = pd.DataFrame(filtered_results)
+    df_results["Geçen Mum"] = df_results["Geçen Mum"].astype(int)
+
+    final_df = df_results[(df_results["Geçen Mum"] == 0) & (df_results["Sinyal"].isin(["AL", "SAT"]))].copy()
+
+    if final_df.empty:
+        print("Son gün AL veya SAT sinyali veren hisse bulunamadı.")
+        return
+
+    output_dir = "/content/output"
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, "FRM.xlsx")
+    export_results(final_df, output_path)
+
+if __name__ == '__main__':
+    main()
+
+
+import pandas as pd
+import numpy as np
+import os
+from openpyxl import load_workbook
+from openpyxl.styles import PatternFill, Alignment, Font
+from openpyxl.utils import get_column_letter
+from concurrent.futures import ProcessPoolExecutor
+from tqdm import tqdm
+from sklearn.linear_model import LinearRegression
+
+folder_path = "/content/data"
+excel_files = [os.path.join(folder_path, f) for f in os.listdir(folder_path) if f.endswith(".xlsx")]
+
+performance_start_date = pd.Timestamp("2019-01-01")
+
+# Yeni alım-satım stratejisine göre hedefler
+partial_targets = [
+    (15, 0.10),
+    (25, 0.15),
+    (34, 0.34),
+    (60, 0.31),
+]
+
+# EMA hesaplama fonksiyonu
+def calculate_ema(series, period):
+    """Calculate Exponential Moving Average."""
+    return series.ewm(span=period, adjust=False).mean()
+
+# Pearson korelasyonu hesaplama fonksiyonu
+def calculate_pearson(df, periods): 
+    """Calculate Pearson correlation coefficient for the given periods."""
+    pearson_values = {}
+    for period in periods:
+        if len(df) >= period:
+            y = df['close'].tail(period)
+            X = np.array(range(period)).reshape(-1, 1)  # Zaman dizisi
+            model = LinearRegression().fit(X, y)
+            pearson_coefficient = np.corrcoef(X.T[0], y)[0, 1]
+            pearson_values[f'Pearson {period} Gün'] = round(pearson_coefficient, 2)  # Yuvarla
+        else:
+            pearson_values[f'Pearson {period} Gün'] = None  # Yetersiz veri olduğunda None ekle
+    return pearson_values
+
+# EMA UP ve IDEAL UP kontrol fonksiyonu
+def check_ema_up(df):
+    """Check for EMA 'UP' and 'IDEAL UP' conditions."""
+    last_row = df.iloc[-1]
+    closing_price = last_row['close']
+    
+    # "UP" durumu kontrolü
+    all_above = all(closing_price > last_row[ema] for ema in [
+        'EMA8', 'EMA13', 'EMA21', 'EMA34', 'EMA55', 'EMA89', 'EMA144', 'EMA233'
+    ])
+    
+    # "IDEAL UP" durumu kontrolü
+    ideal_up = (closing_price > last_row['EMA8'] and
+                last_row['EMA8'] > last_row['EMA13'] and
+                last_row['EMA13'] > last_row['EMA21'] and
+                last_row['EMA21'] > last_row['EMA34'] and
+                last_row['EMA34'] > last_row['EMA55'] and
+                last_row['EMA55'] > last_row['EMA89'] and
+                last_row['EMA89'] > last_row['EMA144'] and
+                last_row['EMA144'] > last_row['EMA233'])
+    
+    return all_above, ideal_up
+
+def process_file(file_path):
+    df = pd.read_excel(file_path)
+    df['datetime'] = pd.to_datetime(df['datetime'])
+    df = df.sort_values('datetime').reset_index(drop=True)
+
+    close = df['close']
+    
+    # TEMA hesaplamaları (144 ve 233 periyotları)
+    def calculate_tema(data, period):
+        ema1 = data.ewm(span=period, adjust=False).mean()
+        ema2 = ema1.ewm(span=period, adjust=False).mean()
+        ema3 = ema2.ewm(span=period, adjust=False).mean()
+        return 3 * ema1 - 3 * ema2 + ema3
+
+    df['TEMA144'] = calculate_tema(df['close'], period=144)
+    df['TEMA233'] = calculate_tema(df['close'], period=233)
+
+    # Sinyal tespiti
+    df['Prev_TEMA144'] = df['TEMA144'].shift(1)
+    df['Prev_TEMA233'] = df['TEMA233'].shift(1)
+
+    df['Signal'] = np.where(
+        (df['TEMA144'] > df['TEMA233']) & (df['Prev_TEMA144'] <= df['Prev_TEMA233']), 'AL',
+        np.where((df['TEMA144'] < df['TEMA233']) & (df['Prev_TEMA144'] >= df['Prev_TEMA233']), 'SAT', None)
+    )
+
+    df['Days Since Cross'] = df['Signal'].ffill().apply(lambda x: 0 if x == 'AL' or x == 'SAT' else np.nan)
+    
+    # İşlem günlerine dair yeni analiz
+    successful_count = 0
+    failed_count = 0
+
+    entry_price = None
+    entry_date = None
+    remaining_lot = 0
+    partial_targets_hit = set()
+
+    start_idx = df[df['datetime'] >= performance_start_date].index.min()
+    if start_idx is None:
+        start_idx = 0
+
+    for i in range(start_idx, len(df) - 1):
+        if df.loc[i, 'Signal'] == 'AL' and (i == 0 or df.loc[i - 1, 'Signal'] != 'AL'):
+            entry_price = df.loc[i + 1, 'open']
+            entry_date = df.loc[i + 1, 'datetime']
+            remaining_lot = 1.0
+            partial_targets_hit.clear()
+
+        elif df.loc[i, 'Signal'] == 'SAT' and (i == 0 or df.loc[i - 1, 'Signal'] != 'SAT') and entry_price is not None:
+            exit_price = df.loc[i + 1, 'open']
+            exit_date = df.loc[i + 1, 'datetime']
+
+            if entry_date >= performance_start_date:
+                profit_pct = ((exit_price - entry_price) / entry_price) * 100
+                if profit_pct > 0:
+                    successful_count += 1
+                else:
+                    failed_count += 1
+
+            entry_price = None
+            remaining_lot = 0
+            partial_targets_hit.clear()
+
+        elif entry_price is not None and remaining_lot > 0:
+            current_price = df.loc[i, 'high']
+            for pct, lot_frac in partial_targets:
+                if pct not in partial_targets_hit:
+                    target_price = entry_price * (1 + pct / 100)
+                    if current_price >= target_price:
+                        partial_targets_hit.add(pct)
+                        remaining_lot -= lot_frac
+                        if remaining_lot < 0:
+                            remaining_lot = 0
+                        successful_count += 1
+                        break
+
+    total_trades = successful_count + failed_count
+    profitability_pct = (successful_count / total_trades * 100) if total_trades > 0 else 0
+
+    last_pos = df['Signal'].dropna().iloc[-1] if not df['Signal'].dropna().empty else np.nan
+    signal = "AL" if last_pos == 'AL' else "SAT" if last_pos == 'SAT' else "TUT"
+    signal_index = df[df['Signal'] == last_pos].index[-1] if not df[df['Signal'] == last_pos].empty else 0
+
+    for i in reversed(range(signal_index)):
+        if df.loc[i, 'Signal'] != last_pos:
+            signal_date = df.loc[i + 1, 'datetime']
+            bars_since = len(df) - (i + 1) - 1
+            break
+    else:
+        signal_date = df.loc[0, 'datetime']
+        bars_since = len(df) - 1
+
+    hisse_adi = os.path.basename(file_path).replace('_daily_data.xlsx', '').replace('.xlsx', '')
+
+    # --- Pearson ve EMA hesaplamaları
+    periods = [55, 89, 144, 233]
+    pearson_values = calculate_pearson(df, periods)
+    df['EMA8'] = calculate_ema(df['close'], 8)
+    df['EMA13'] = calculate_ema(df['close'], 13)
+    df['EMA21'] = calculate_ema(df['close'], 21)
+    df['EMA34'] = calculate_ema(df['close'], 34)
+    df['EMA55'] = calculate_ema(df['close'], 55)
+    df['EMA89'] = calculate_ema(df['close'], 89)
+    df['EMA144'] = calculate_ema(df['close'], 144)
+    df['EMA233'] = calculate_ema(df['close'], 233)
+
+    # --- EMA UP ve IDEAL UP hesaplama
+    all_above, ideal_up = check_ema_up(df)
+
+    return {
+        "Hisse": hisse_adi,
+        "Tarih": signal_date,
+        "Sinyal": signal,
+        "Geçen Mum": bars_since,
+        "Toplam İşlem Sayısı": total_trades,
+        "Başarılı İşlem Sayısı": successful_count,
+        "Başarısız İşlem Sayısı": failed_count,
+        "Kar %": round(profitability_pct, 2),
+        **pearson_values,  # Pearson değerlerini ekle
+        "EMA UP": all_above,
+        "IDEAL UP": ideal_up
+    }
+
+def export_results(results_df, output_path):
+    results_df['Tarih'] = pd.to_datetime(results_df['Tarih'])
+    results_df = results_df.sort_values(by='Tarih', ascending=False)
+    results_df['Tarih'] = results_df['Tarih'].dt.strftime('%d.%m.%Y')
+
+    results_df.to_excel(output_path, index=False)
+    wb = load_workbook(output_path)
+    ws = wb.active
+
+    ws.auto_filter.ref = ws.dimensions
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+
+    ws.column_dimensions['A'].width = 15
+    for col in ws.iter_cols(min_col=2, max_col=ws.max_column):
+        col_letter = get_column_letter(col[0].column)
+        ws.column_dimensions[col_letter].width = 17
+
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row, max_col=ws.max_column):
+        sinyal = row[2].value
+        bars_since = int(row[3].value)
+        for cell in row:
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+        if bars_since == 0:
+            fill_color = "C6EFCE" if sinyal == "AL" else "FFC7CE" if sinyal == "SAT" else None
+            if fill_color:
+                fill = PatternFill(start_color=fill_color, end_color=fill_color, fill_type="solid")
+                for cell in row:
+                    cell.fill = fill
+
+    wb.save(output_path)
+    print("✅ Excel başarıyla kaydedildi:", output_path)
+
+def main():
+    with ProcessPoolExecutor() as executor:
+        results = list(tqdm(executor.map(process_file, excel_files), total=len(excel_files), desc="Dosyalar işleniyor"))
+
+    filtered_results = [r for r in results if r is not None]
+    if not filtered_results:
+        print("Hiç sinyal bulunamadı.")
+        return
+
+    df_results = pd.DataFrame(filtered_results)
+    df_results["Geçen Mum"] = df_results["Geçen Mum"].astype(int)
+
+    # **Geçen Mum sayısını 0 yapıyoruz**
+    final_df = df_results[ 
+        (df_results["Geçen Mum"] == 0)  # Geçen Mum sayısı 0 olacak şekilde filtreleme
+    ].copy()
+
+    if final_df.empty:
+        print("Son gün AL veya SAT sinyali veren hisse bulunamadı.")
+        return
+
+    output_dir = "/content/output"
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, "SKYLAR_1D.xlsx")
+    export_results(final_df, output_path)
+
+if __name__ == '__main__':
+    main()
